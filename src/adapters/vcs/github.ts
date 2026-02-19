@@ -286,15 +286,33 @@ export class GitHubAdapter implements VCSAdapter {
       comment: 'COMMENT'
     };
 
-    await this.octokit.pulls.createReview({
-      owner: this.owner,
-      repo: this.repo,
-      pull_number: Number(prId),
-      event: eventMap[review.verdict],
-      body: review.summary,
-      comments,
-      commit_id: pr.head.sha
-    });
+    try {
+      await this.octokit.pulls.createReview({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: Number(prId),
+        event: eventMap[review.verdict],
+        body: review.summary,
+        comments,
+        commit_id: pr.head.sha
+      });
+    } catch (error: any) {
+      // Fall back to COMMENT if REQUEST_CHANGES fails on own PR
+      if (review.verdict === 'request_changes' && error.message?.includes('your own pull request')) {
+        console.log('⚠️  Cannot request changes on own PR, posting as comment instead...');
+        await this.octokit.pulls.createReview({
+          owner: this.owner,
+          repo: this.repo,
+          pull_number: Number(prId),
+          event: 'COMMENT',
+          body: review.summary + '\n\n> ⚠️ **Note:** Would have requested changes, but this is your own PR.',
+          comments,
+          commit_id: pr.head.sha
+        });
+      } else {
+        throw error;
+      }
+    }
   }
 
   async getLinkedTickets(prId: string | number): Promise<Ticket[]> {
