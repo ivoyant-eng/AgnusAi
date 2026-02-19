@@ -39,6 +39,7 @@ export interface CommentManagerResult {
   posted: number;
   filtered: Array<{ comment: ReviewComment; reason: FilterReason }>;
   skipped: string[];
+  skippedFiles: string[];
   warnings: string[];
   errors: string[];
   checkpoint?: {
@@ -95,6 +96,7 @@ export class CommentManager {
       posted: 0,
       filtered: [],
       skipped: [],
+      skippedFiles: [],
       warnings: [],
       errors: []
     };

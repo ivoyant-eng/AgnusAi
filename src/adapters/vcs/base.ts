@@ -245,14 +245,6 @@ export interface VCSAdapter {
 }
 
 /**
- * File rename information
- */
-export interface FileRename {
-  oldPath: string;
-  newPath: string;
-}
-
-/**
  * Check if a VCS adapter supports all deduplication features
  */
 export function hasDeduplicationSupport(adapter: VCSAdapter): boolean {

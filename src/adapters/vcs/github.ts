@@ -235,13 +235,7 @@ export class GitHubAdapter implements VCSAdapter {
    * @param commentId The review comment ID
    * @returns The comment data
    */
-  async getReviewComment(commentId: number): Promise<{
-    id: number;
-    body: string;
-    user: { login: string } | null;
-    path?: string;
-    line?: number;
-  }> {
+  async getReviewComment(commentId: number): Promise<DetailedReviewComment> {
     const { data: comment } = await this.octokit.pulls.getReviewComment({
       owner: this.owner,
       repo: this.repo,
@@ -251,9 +245,19 @@ export class GitHubAdapter implements VCSAdapter {
     return {
       id: comment.id,
       body: comment.body || '',
-      user: comment.user ? { login: comment.user.login } : null,
+      user: {
+        login: comment.user?.login || 'unknown',
+        type: comment.user?.type || 'User'
+      },
       path: comment.path,
-      line: comment.line ?? undefined
+      line: comment.line ?? comment.original_line ?? null,
+      originalLine: comment.original_line ?? null,
+      position: comment.position ?? null,
+      commitId: comment.commit_id,
+      inReplyToId: comment.in_reply_to_id ?? null,
+      createdAt: comment.created_at,
+      updatedAt: comment.updated_at,
+      htmlUrl: comment.html_url
     };
   }
 
