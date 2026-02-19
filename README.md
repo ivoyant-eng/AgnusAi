@@ -418,30 +418,261 @@ steps:
 ## Roadmap
 
 ### ✅ Phase 1 — Foundation
-- GitHub adapter
-- Ollama backend
-- CLI skeleton
-- Context builder
-- Inline comments on specific lines
+- [x] GitHub adapter
+- [x] Ollama backend
+- [x] CLI skeleton
+- [x] Context builder
+- [x] Inline comments on specific lines
 
 ### ✅ Phase 2 — Multi-provider
-- Claude backend
-- OpenAI backend
-- Azure DevOps adapter with LCS-based real diff
-- Decoupled `prompt.ts` / `parser.ts` shared across all providers
-- Rich comment format (Severity, Steps of Reproduction, AI Fix Prompt)
+- [x] Claude backend
+- [x] OpenAI backend
+- [x] Azure DevOps adapter with LCS-based real diff
+- [x] Decoupled `prompt.ts` / `parser.ts` shared across all providers
+- [x] Rich comment format (Severity, Steps of Reproduction, AI Fix Prompt)
 
 ### 🔲 Phase 3 — Ticket Integration
-- Jira adapter
-- Linear adapter
-- GitHub Issues adapter
-- Azure Boards adapter
-- Memory system (learned conventions)
+- [ ] Jira adapter
+- [ ] Linear adapter
+- [ ] GitHub Issues adapter
+- [ ] Azure Boards adapter
+- [ ] Memory system (learned conventions)
 
 ### 🔲 Phase 4 — Distribution
-- Binary distribution (pkg/bun)
-- npm global install
-- Homebrew formula
+- [ ] Binary distribution (pkg/bun)
+- [ ] npm global install
+- [ ] Homebrew formula
+
+---
+
+## 🚀 v2 Roadmap — Closing the Gap with CodeRabbit
+
+The following features are planned to bring AgnusAI to feature parity with CodeRabbit and beyond.
+
+### Priority Overview
+
+| Priority | Feature | Impact | Effort | Status |
+|----------|---------|--------|--------|--------|
+| **P1** | Incremental PR Reviews | 🔴 High | 🟡 Medium | 🔲 Not Started |
+| **P1** | Comment Reply Handling | 🔴 High | 🟢 Low | 🔲 Not Started |
+| **P2** | TypeScript Type Checking | 🟡 Medium | 🟡 Medium | 🔲 Not Started |
+| **P2** | Codebase Embeddings | 🔴 High | 🔴 High | 🔲 Not Started |
+| **P3** | Multi-language LSP | 🟡 Medium | 🔴 High | 🔲 Not Started |
+| **P3** | Impact Analysis | 🔴 High | 🔴 High | 🔲 Not Started |
+
+---
+
+### P1: Incremental PR Reviews
+
+**Goal:** Only review new changes after user commits, avoiding duplicate reviews.
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| SHA Tracking | Store `lastReviewedSHA` in comment metadata | 🔲 |
+| GitHub Compare API | Use `/repos/{owner}/{repo}/compare/{base}...{head}` for incremental diff | 🔲 |
+| Comment Validation | Check if existing comments are still valid on changed files | 🔲 |
+| Stale Comment Handling | Mark or resolve outdated comments when files change | 🔲 |
+
+**Technical Approach:**
+```
+GitHub Webhook → PR Event Handler → Incremental Diff Analyzer
+     │
+     ▼
+Check lastReviewedSHA → Fetch diff since last review → Review delta only
+     │
+     ▼
+Update lastReviewedSHA in comment metadata
+```
+
+---
+
+### P1: Comment Reply Handling (Conversation Threads)
+
+**Goal:** Handle replies to AI comments via webhook, enabling contextual conversations.
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| Webhook Handler | Listen for `pull_request_review_comment` events | 🔲 |
+| Reply API Integration | `POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies` | 🔲 |
+| Context Building | Include original issue + user's reply for LLM context | 🔲 |
+| Conversation Memory | Track thread history for coherent responses | 🔲 |
+
+**Technical Approach:**
+```
+User replies to AI comment → Webhook triggers handler
+     │
+     ▼
+Fetch original comment context → Build prompt with thread history
+     │
+     ▼
+LLM generates response → Post as reply via GitHub API
+```
+
+---
+
+### P2: LSP Integration for Type-Aware Reviews
+
+**Goal:** Leverage TypeScript Compiler API for type-aware code reviews.
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| TypeScript Compiler API | Use `ts.createProgram()` for type analysis | 🔲 |
+| Type Extraction | `checker.getTypeAtLocation()` for symbol info | 🔲 |
+| Diagnostic Collection | Extract TypeScript errors/warnings | 🔲 |
+| Context Injection | Add type information to review prompt | 🔲 |
+| Signatures & Types | Include function signatures, return types, generics | 🔲 |
+
+**Technical Approach:**
+```
+LSP Manager → TypeScript Program (ts.createProgram)
+     │
+     ▼
+TypeChecker → getTypeAtLocation() → Extract types, diagnostics
+     │
+     ▼
+Context Builder → Inject type info into review prompt
+     │
+     ▼
+LLM Backend → Type-aware review with rich context
+```
+
+**Example Context Injection:**
+```typescript
+// Type context added to prompt
+// Function: `processData(input: unknown)`
+// Inferred type: `input: { id: string; data: Record<string, unknown> }`
+// Diagnostic: 'unsafe assignment of type `unknown`'
+```
+
+---
+
+### P2: Codebase Embeddings (Context Awareness)
+
+**Goal:** Enable semantic codebase understanding for better review context.
+
+| Component | Description | Status |
+|-----------|-------------|--------|
+| Embedding Generation | Use Vercel AI SDK `embedMany()` for batch embeddings | 🔲 |
+| Vector Database | Store embeddings in Qdrant (recommended) | 🔲 |
+| Chunking Strategy | Chunk by function/class with metadata | 🔲 |
+| Similarity Search | Query similar patterns during review | 🔲 |
+| Dependents Query | Find files that import/depend on changed code | 🔲 |
+
+**Technical Approach:**
+```
+Codebase → Chunker (function/class level) → embedMany()
+     │
+     ▼
+Vector DB (Qdrant) ← Store with metadata (file, line, type)
+     │
+     ▼
+During Review → Query similar patterns → Inject into context
+     │
+     ▼
+Impact Analysis → Find dependents/usages of changed code
+```
+
+**Metadata Schema:**
+```typescript
+interface CodeChunk {
+  id: string;
+  content: string;
+  embedding: number[];
+  metadata: {
+    file: string;
+    startLine: number;
+    endLine: number;
+    type: 'function' | 'class' | 'interface' | 'constant';
+    name: string;
+    exports: string[];
+    imports: string[];
+  };
+}
+```
+
+---
+
+### P3: Multi-language LSP + Impact Analysis
+
+**Goal:** Extend LSP support beyond TypeScript and enable impact analysis.
+
+| Language | LSP Server | Status |
+|----------|------------|--------|
+| TypeScript | `ts.createProgram()` | 🔲 (P2) |
+| Python | Pyright / Pylance | 🔲 |
+| Go | gopls | 🔲 |
+| Rust | rust-analyzer | 🔲 |
+| Java | jdtls | 🔲 |
+
+**Impact Analysis Features:**
+- [ ] Find all dependents of changed functions/classes
+- [ ] Detect breaking API changes
+- [ ] Suggest related files that may need updates
+- [ ] Generate call graphs for affected code paths
+
+---
+
+## Architecture Overview (v2)
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                         GitHub Webhook                               │
+│                   (PR events, comment replies)                       │
+└──────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                        PR Event Handler                              │
+│              • Incremental Diff Analyzer                             │
+│              • Comment Manager (post/reply/resolve)                  │
+└──────────────────────────────────────────────────────────────────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          ▼                    ▼                    ▼
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│   LSP Manager    │  │   Context Builder │  │    Vector DB     │
+│                  │  │                   │  │    (Qdrant)      │
+│ • TypeScript     │  │ • Diff context    │  │                  │
+│ • Python (P3)    │  │ • Type info       │  │ • Embeddings     │
+│ • Go (P3)        │  │ • Similar code    │  │ • Metadata       │
+│ • Rust (P3)      │  │ • Thread history  │  │ • Queries        │
+└──────────────────┘  └──────────────────┘  └──────────────────┘
+          │                    │                    │
+          └────────────────────┼────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                        LLM Backend                                   │
+│                   (Vercel AI SDK)                                    │
+│              • Ollama • Claude • OpenAI                              │
+└──────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                        Comment Manager                               │
+│              • Post inline comments                                   │
+│              • Reply to threads                                       │
+│              • Resolve stale comments                                 │
+│              • Update lastReviewedSHA                                 │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Implementation Order
+
+Recommended implementation sequence based on impact vs. effort:
+
+```
+Week 1-2:  P1 - Comment Reply Handling (Low effort, High impact)
+Week 2-3:  P1 - Incremental Reviews (Medium effort, High impact)
+Week 4-5:  P2 - TypeScript Type Checking (Medium effort, Medium impact)
+Week 6-8:  P2 - Codebase Embeddings (High effort, High impact)
+Week 9+:   P3 - Multi-language LSP + Impact Analysis
+```
+
+---
+
+**Want to contribute?** Check our [CONTRIBUTING.md](./CONTRIBUTING.md) or pick up an issue from the roadmap!
 
 ## Contributing
 
