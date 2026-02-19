@@ -149,8 +149,30 @@ export interface TicketConfig {
 }
 
 export interface LLMConfig {
-  provider: 'ollama' | 'claude' | 'openai';
+  // Provider selection: ollama, openai, azure, or custom
+  provider: 'ollama' | 'openai' | 'azure' | 'custom';
+  // Model ID (provider-specific)
   model: string;
+  // Provider-specific configurations
+  providers?: {
+    ollama?: {
+      baseURL?: string;
+    };
+    openai?: {
+      baseURL?: string;
+      apiKey?: string;
+    };
+    azure?: {
+      baseURL?: string;
+      apiKey?: string;
+    };
+    custom?: {
+      baseURL?: string;
+      apiKey?: string;
+      headers?: Record<string, string>;
+    };
+  };
+  // Legacy fields for backward compatibility
   baseUrl?: string;
   apiKey?: string;
 }

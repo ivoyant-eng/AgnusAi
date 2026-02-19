@@ -1,15 +1,25 @@
-// Claude LLM Backend — API call only
+// Claude LLM Backend — DEPRECATED
+// This backend is deprecated. Use UnifiedLLMBackend from './unified' instead.
+// Note: Claude is no longer directly supported. Use OpenAI or a custom endpoint
+// that provides Claude via OpenAI-compatible API (e.g., OpenRouter, AWS Bedrock).
 
 import fetch from 'node-fetch';
 import { BaseLLMBackend } from './base';
 import { ReviewContext } from '../types';
 
+/**
+ * @deprecated Use UnifiedLLMBackend from './unified' instead
+ * Claude is no longer directly supported. Use OpenAI-compatible endpoints like OpenRouter.
+ */
 interface ClaudeConfig {
   apiKey: string;
   model?: string;
   maxTokens?: number;
 }
 
+/**
+ * @deprecated Use UnifiedLLMBackend from './unified' instead
+ */
 export class ClaudeBackend extends BaseLLMBackend {
   readonly name = 'claude';
   private apiKey: string;
@@ -48,6 +58,9 @@ export class ClaudeBackend extends BaseLLMBackend {
   }
 }
 
+/**
+ * @deprecated Use createUnifiedBackend from './unified' instead
+ */
 export function createClaudeBackend(config: ClaudeConfig): ClaudeBackend {
   return new ClaudeBackend(config);
 }

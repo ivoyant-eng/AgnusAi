@@ -1,14 +1,22 @@
-// Ollama LLM Backend — API call only
+// Ollama LLM Backend — DEPRECATED
+// This backend is deprecated. Use UnifiedLLMBackend from './unified' instead.
+// The unified backend supports Ollama via the Vercel AI SDK.
 
 import fetch from 'node-fetch';
 import { BaseLLMBackend } from './base';
 import { ReviewContext } from '../types';
 
+/**
+ * @deprecated Use UnifiedLLMBackend from './unified' instead
+ */
 interface OllamaConfig {
   model: string;
   baseUrl?: string;
 }
 
+/**
+ * @deprecated Use UnifiedLLMBackend from './unified' instead
+ */
 export class OllamaBackend extends BaseLLMBackend {
   readonly name = 'ollama';
   private model: string;
@@ -36,6 +44,9 @@ export class OllamaBackend extends BaseLLMBackend {
   }
 }
 
+/**
+ * @deprecated Use createUnifiedBackend from './unified' instead
+ */
 export function createOllamaBackend(config: OllamaConfig): OllamaBackend {
   return new OllamaBackend(config);
 }

@@ -24,7 +24,9 @@
   "author": "Ashish Maurya",
   "license": "MIT",
   "dependencies": {
+    "@ai-sdk/openai-compatible": "^2.0.30",
     "@octokit/rest": "^20.0.2",
+    "ai": "^6.0.91",
     "commander": "^11.1.0",
     "js-yaml": "^4.1.0",
     "node-fetch": "^2.7.0"

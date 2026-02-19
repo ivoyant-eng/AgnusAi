@@ -21,26 +21,36 @@ tickets: []
   #   adapter:
   #     apiKey: ""  # Or set LINEAR_API_KEY env var
 
-# LLM Configuration
+# LLM Configuration - Unified Backend (Vercel AI SDK)
+# Supports any OpenAI-compatible endpoint: Ollama, OpenAI, Azure OpenAI, custom
 llm:
-  # Provider: ollama, claude, or openai
+  # Provider selection: ollama, openai, azure, custom
   provider: ollama
   
-  # Model (provider-specific):
-  # - ollama: qwen3.5:cloud, codellama:70b, deepseek-coder:33b
-  # - claude: claude-sonnet-4-20250514, claude-opus-4-20250514
+  # Model ID (provider-specific):
+  # - ollama: qwen3.5:cloud, codellama:70b, deepseek-coder:33b, llama3.2
   # - openai: gpt-4o, gpt-4-turbo, gpt-3.5-turbo
+  # - azure: your-deployment-name
+  # - custom: any model supported by your endpoint
   model: qwen3.5:cloud
   
-  # Base URL (optional)
-  # ollama: "http://localhost:11434" (default)
-  # openai: "https://api.openai.com/v1" (default) or your Azure OpenAI endpoint
-  baseUrl: "http://localhost:11434"
-  
-  # API Key (for claude/openai) - better to use env vars:
-  # - ANTHROPIC_API_KEY for Claude
-  # - OPENAI_API_KEY for OpenAI
-  apiKey: ""
+  # Provider-specific configurations (optional - env vars take priority)
+  providers:
+    ollama:
+      baseURL: http://localhost:11434/v1
+    openai:
+      baseURL: https://api.openai.com/v1
+      apiKey: ""  # Or set OPENAI_API_KEY env var
+    azure:
+      # Full URL including deployment path, e.g.:
+      # https://your-resource.openai.azure.com/openai/deployments/gpt-4
+      baseURL: ""
+      apiKey: ""  # Or set AZURE_OPENAI_KEY env var
+    custom:
+      baseURL: ""
+      apiKey: ""  # Or set CUSTOM_API_KEY env var
+      # Optional custom headers
+      headers: {}
 
 # Review Settings
 review:

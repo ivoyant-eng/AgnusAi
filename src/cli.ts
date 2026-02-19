@@ -8,9 +8,7 @@ import os from 'os';
 
 import { GitHubAdapter } from './adapters/vcs/github';
 import { AzureDevOpsAdapter } from './adapters/vcs/azure-devops';
-import { OllamaBackend } from './llm/ollama';
-import { ClaudeBackend } from './llm/claude';
-import { OpenAIBackend } from './llm/openai';
+import { UnifiedLLMBackend, UnifiedLLMConfig, ProviderName } from './llm/unified';
 import { SkillLoader } from './skills/loader';
 import { PRReviewAgent } from './index';
 import { Config, LLMConfig } from './types';
@@ -32,7 +30,7 @@ program
   .requiredOption('--repo <repo>', 'Repository (owner/repo format)')
   .option('--vcs <vcs>', 'VCS platform (github|azure)', 'github')
   .option('--skill <skill>', 'Review skill to use', 'default')
-  .option('--provider <provider>', 'LLM provider (ollama|claude)', 'ollama')
+  .option('--provider <provider>', 'LLM provider (ollama|openai|azure|custom)', 'ollama')
   .option('--model <model>', 'LLM model to use')
   .option('--dry-run', 'Show review without posting', false)
   .option('--output <format>', 'Output format (json|markdown)', 'markdown')
@@ -44,7 +42,7 @@ program
       
       // Override with CLI options
       if (options.provider) {
-        config.llm.provider = options.provider as LLMConfig['provider'];
+        config.llm.provider = options.provider as ProviderName;
       }
       if (options.model) {
         config.llm.model = options.model;
@@ -83,38 +81,9 @@ program
         process.exit(1);
       }
 
-      // Initialize LLM backend
-      let llm;
-      if (config.llm.provider === 'ollama') {
-        llm = new OllamaBackend({
-          model: config.llm.model || 'qwen3.5:cloud',
-          baseUrl: config.llm.baseUrl
-        });
-      } else if (config.llm.provider === 'claude') {
-        const apiKey = process.env.ANTHROPIC_API_KEY || config.llm.apiKey;
-        if (!apiKey) {
-          console.error('Anthropic API key required for Claude provider. Set ANTHROPIC_API_KEY env or config.');
-          process.exit(1);
-        }
-        llm = new ClaudeBackend({
-          apiKey,
-          model: config.llm.model || 'claude-sonnet-4-20250514'
-        });
-      } else if (config.llm.provider === 'openai') {
-        const apiKey = process.env.OPENAI_API_KEY || config.llm.apiKey;
-        if (!apiKey) {
-          console.error('OpenAI API key required. Set OPENAI_API_KEY env or config.');
-          process.exit(1);
-        }
-        llm = new OpenAIBackend({
-          apiKey,
-          model: config.llm.model || 'gpt-4o',
-          baseUrl: config.llm.baseUrl
-        });
-      } else {
-        console.error(`Unknown LLM provider: ${config.llm.provider}. Supported: ollama, claude, openai`);
-        process.exit(1);
-      }
+      // Initialize LLM backend using unified connector
+      const llmConfig = getLLMConfig(config.llm);
+      const llm = new UnifiedLLMBackend(llmConfig);
 
       // Initialize skills
       const skillsPath = config.skills?.path || DEFAULT_SKILLS_PATH;
@@ -194,7 +163,11 @@ function loadConfig(configPath: string): Config {
     llm: {
       provider: 'ollama',
       model: 'qwen3.5:cloud',
-      baseUrl: 'http://localhost:11434'
+      providers: {
+        ollama: {
+          baseURL: 'http://localhost:11434/v1'
+        }
+      }
     },
     review: {
       maxDiffSize: 50000,
@@ -220,6 +193,61 @@ function loadConfig(configPath: string): Config {
     console.error(`Failed to load config: ${error}`);
     return defaultConfig;
   }
+}
+
+/**
+ * Build UnifiedLLMConfig from the new config format with env var support
+ */
+function getLLMConfig(config: LLMConfig): UnifiedLLMConfig {
+  const provider = config.provider as ProviderName;
+  const model = config.model;
+
+  // Get provider-specific settings from config
+  const providerConfig = config.providers?.[provider] as {
+    baseURL?: string;
+    apiKey?: string;
+    headers?: Record<string, string>;
+  } | undefined;
+
+  const result: UnifiedLLMConfig = {
+    provider,
+    model,
+    baseURL: providerConfig?.baseURL,
+    apiKey: providerConfig?.apiKey,
+  };
+
+  // Environment variable overrides (highest priority)
+  switch (provider) {
+    case 'ollama':
+      result.baseURL = process.env.OLLAMA_BASE_URL || result.baseURL || 'http://localhost:11434/v1';
+      break;
+    case 'openai':
+      result.apiKey = process.env.OPENAI_API_KEY || result.apiKey;
+      result.baseURL = process.env.OPENAI_BASE_URL || result.baseURL || 'https://api.openai.com/v1';
+      break;
+    case 'azure':
+      result.apiKey = process.env.AZURE_OPENAI_KEY || result.apiKey;
+      result.baseURL = process.env.AZURE_OPENAI_ENDPOINT || result.baseURL;
+      break;
+    case 'custom':
+      result.apiKey = process.env.CUSTOM_API_KEY || result.apiKey;
+      result.baseURL = process.env.CUSTOM_ENDPOINT || result.baseURL;
+      break;
+  }
+
+  // Validate that cloud providers have API keys
+  if ((provider === 'openai' || provider === 'azure' || provider === 'custom') && !result.apiKey) {
+    console.error(`API key required for provider '${provider}'. Set the appropriate environment variable.`);
+    process.exit(1);
+  }
+
+  // Validate that custom/azure have baseURL
+  if ((provider === 'custom' || provider === 'azure') && !result.baseURL) {
+    console.error(`baseURL is required for provider '${provider}'. Set it in config or environment variable.`);
+    process.exit(1);
+  }
+
+  return result;
 }
 
 function printMarkdownReview(result: import('./types').ReviewResult): void {

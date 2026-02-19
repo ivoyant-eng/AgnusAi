@@ -1,9 +1,14 @@
-// OpenAI LLM Backend — API call only
+// OpenAI LLM Backend — DEPRECATED
+// This backend is deprecated. Use UnifiedLLMBackend from './unified' instead.
+// The unified backend supports OpenAI via the Vercel AI SDK.
 
 import fetch from 'node-fetch';
 import { BaseLLMBackend } from './base';
 import { ReviewContext } from '../types';
 
+/**
+ * @deprecated Use UnifiedLLMBackend from './unified' instead
+ */
 interface OpenAIConfig {
   apiKey: string;
   model?: string;
@@ -11,6 +16,9 @@ interface OpenAIConfig {
   baseUrl?: string;
 }
 
+/**
+ * @deprecated Use UnifiedLLMBackend from './unified' instead
+ */
 export class OpenAIBackend extends BaseLLMBackend {
   readonly name = 'openai';
   private apiKey: string;
@@ -50,6 +58,9 @@ export class OpenAIBackend extends BaseLLMBackend {
   }
 }
 
+/**
+ * @deprecated Use createUnifiedBackend from './unified' instead
+ */
 export function createOpenAIBackend(config: OpenAIConfig): OpenAIBackend {
   return new OpenAIBackend(config);
 }
