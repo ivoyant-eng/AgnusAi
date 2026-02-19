@@ -96,55 +96,58 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   async getDiff(prId: string | number): Promise<Diff> {
-    // Get the list of changed files
     const url = this.getGitApiUrl(
       `/repositories/${this.repository}/pullrequests/${prId}/iterations?api-version=7.0`
     );
 
-    const response = await fetch(url, {
-      headers: this.getAuthHeaders()
-    });
-
+    const response = await fetch(url, { headers: this.getAuthHeaders() });
     if (!response.ok) {
       throw new Error(`Failed to fetch PR iterations: ${response.statusText}`);
     }
 
-    const iterations = await response.json() as { value: Array<{ id: number }> };
-    const latestIteration = iterations.value[iterations.value.length - 1]?.id || 1;
+    const iterations = await response.json() as {
+      value: Array<{
+        id: number;
+        sourceRefCommit?: { commitId: string };
+        targetRefCommit?: { commitId: string };
+        commonRefCommit?: { commitId: string };
+      }>
+    };
 
-    // Get changes in the iteration
+    const latest = iterations.value[iterations.value.length - 1];
+    const sourceCommit = latest?.sourceRefCommit?.commitId ?? '';
+    // commonRefCommit is the merge base — best "before" snapshot
+    const targetCommit = latest?.commonRefCommit?.commitId
+      ?? latest?.targetRefCommit?.commitId
+      ?? '';
+
     const changesUrl = this.getGitApiUrl(
-      `/repositories/${this.repository}/pullrequests/${prId}/iterations/${latestIteration}/changes?api-version=7.0`
+      `/repositories/${this.repository}/pullrequests/${prId}/iterations/${latest.id}/changes?api-version=7.0`
     );
 
-    const changesResponse = await fetch(changesUrl, {
-      headers: this.getAuthHeaders()
-    });
-
+    const changesResponse = await fetch(changesUrl, { headers: this.getAuthHeaders() });
     if (!changesResponse.ok) {
       throw new Error(`Failed to fetch PR changes: ${changesResponse.statusText}`);
     }
 
     const changesData = await changesResponse.json() as {
       changeEntries: Array<{
-        changeId: number;
-        changeTrackingId: number;
         item: { path: string };
         changeType: 'add' | 'edit' | 'delete' | 'rename';
       }>
     };
 
-    // Get the actual diff for each file
     const files: FileDiff[] = [];
     let totalAdditions = 0;
     let totalDeletions = 0;
 
     for (const change of changesData.changeEntries || []) {
-      const diffContent = await this.getFileDiff(prId, change.item.path, latestIteration);
-      
+      const status = this.mapChangeType(change.changeType);
+      const diffContent = await this.getFileDiff(change.item.path, sourceCommit, targetCommit, status);
+
       files.push({
         path: change.item.path,
-        status: this.mapChangeType(change.changeType),
+        status,
         additions: diffContent.additions,
         deletions: diffContent.deletions,
         hunks: diffContent.hunks
@@ -154,55 +157,138 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       totalDeletions += diffContent.deletions;
     }
 
-    return {
-      files,
-      additions: totalAdditions,
-      deletions: totalDeletions,
-      changedFiles: files.length
-    };
+    return { files, additions: totalAdditions, deletions: totalDeletions, changedFiles: files.length };
   }
 
   private async getFileDiff(
-    prId: string | number,
     filePath: string,
-    iteration: number
+    sourceCommit: string,
+    targetCommit: string,
+    status: FileDiff['status']
   ): Promise<{ additions: number; deletions: number; hunks: DiffHunk[] }> {
-    // Fetch diff content
-    const url = this.getGitApiUrl(
-      `/repositories/${this.repository}/pullrequests/${prId}/iterations/${iteration}/changes?api-version=7.0&$top=1&changeId=${filePath}`
-    );
+    const [oldContent, newContent] = await Promise.all([
+      status !== 'added' && targetCommit ? this.fetchFileAtCommit(filePath, targetCommit) : Promise.resolve(''),
+      status !== 'deleted' && sourceCommit ? this.fetchFileAtCommit(filePath, sourceCommit) : Promise.resolve('')
+    ]);
+    return this.computeFileDiff(oldContent, newContent);
+  }
 
+  private async fetchFileAtCommit(filePath: string, commitId: string): Promise<string> {
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/items?path=${encodeURIComponent(filePath)}&versionDescriptor[versionType]=commit&versionDescriptor[version]=${commitId}&api-version=7.0`
+    );
     try {
       const response = await fetch(url, {
-        headers: { ...this.getAuthHeaders(), 'Accept': 'application/json' }
+        headers: { ...this.getAuthHeaders(), 'Accept': 'application/octet-stream' }
       });
-
-      if (!response.ok) {
-        // Could not fetch diff, return empty
-        return { additions: 0, deletions: 0, hunks: [] };
-      }
-
-      // Parse the diff content from the response
-      // Azure DevOps API returns diff in a specific format
-      const data = await response.json() as {
-        changeEntries?: Array<{
-          linesAdded?: number;
-          linesRemoved?: number;
-        }>
-      };
-
-      const changeEntry = data.changeEntries?.[0];
-      const additions = changeEntry?.linesAdded || 0;
-      const deletions = changeEntry?.linesRemoved || 0;
-
-      return {
-        additions,
-        deletions,
-        hunks: [] // Would need additional API call for full hunks
-      };
+      if (!response.ok) return '';
+      return await response.text();
     } catch {
+      return '';
+    }
+  }
+
+  private computeFileDiff(
+    oldContent: string,
+    newContent: string
+  ): { additions: number; deletions: number; hunks: DiffHunk[] } {
+    const oldLines = oldContent ? oldContent.split('\n') : [];
+    const newLines = newContent ? newContent.split('\n') : [];
+
+    if (oldLines.length === 0 && newLines.length === 0) {
       return { additions: 0, deletions: 0, hunks: [] };
     }
+
+    const edits = this.lcsEdits(oldLines, newLines);
+    const additions = edits.filter(e => e.type === 'add').length;
+    const deletions = edits.filter(e => e.type === 'remove').length;
+    const hunks = this.buildHunks(edits, 3);
+
+    return { additions, deletions, hunks };
+  }
+
+  private lcsEdits(
+    oldLines: string[],
+    newLines: string[]
+  ): Array<{ type: 'equal' | 'add' | 'remove'; oldLine: number; newLine: number; content: string }> {
+    const m = oldLines.length;
+    const n = newLines.length;
+
+    // Avoid O(m*n) blowup on very large files — treat as full replacement
+    if (m * n > 600_000) {
+      return [
+        ...oldLines.map((c, i) => ({ type: 'remove' as const, oldLine: i + 1, newLine: 0, content: c })),
+        ...newLines.map((c, i) => ({ type: 'add' as const, oldLine: 0, newLine: i + 1, content: c }))
+      ];
+    }
+
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0) as number[]);
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        dp[i][j] = oldLines[i - 1] === newLines[j - 1]
+          ? dp[i - 1][j - 1] + 1
+          : Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+
+    const result: Array<{ type: 'equal' | 'add' | 'remove'; oldLine: number; newLine: number; content: string }> = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+        result.unshift({ type: 'equal', oldLine: i, newLine: j, content: oldLines[i - 1] });
+        i--; j--;
+      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+        result.unshift({ type: 'add', oldLine: 0, newLine: j, content: newLines[j - 1] });
+        j--;
+      } else {
+        result.unshift({ type: 'remove', oldLine: i, newLine: 0, content: oldLines[i - 1] });
+        i--;
+      }
+    }
+    return result;
+  }
+
+  private buildHunks(
+    edits: Array<{ type: 'equal' | 'add' | 'remove'; oldLine: number; newLine: number; content: string }>,
+    context: number
+  ): DiffHunk[] {
+    const changedIdxs = edits.reduce<number[]>((acc, e, i) => {
+      if (e.type !== 'equal') acc.push(i);
+      return acc;
+    }, []);
+
+    if (changedIdxs.length === 0) return [];
+
+    // Merge overlapping context windows into ranges
+    const ranges: [number, number][] = [];
+    for (const idx of changedIdxs) {
+      const start = Math.max(0, idx - context);
+      const end = Math.min(edits.length - 1, idx + context);
+      if (ranges.length && ranges[ranges.length - 1][1] >= start - 1) {
+        ranges[ranges.length - 1][1] = end;
+      } else {
+        ranges.push([start, end]);
+      }
+    }
+
+    return ranges.map(([start, end]) => {
+      const slice = edits.slice(start, end + 1);
+      const oldStart = slice.find(e => e.oldLine > 0)?.oldLine ?? 1;
+      const newStart = slice.find(e => e.newLine > 0)?.newLine ?? 1;
+      const oldLineCount = slice.filter(e => e.type !== 'add').length;
+      const newLineCount = slice.filter(e => e.type !== 'remove').length;
+      const body = slice.map(e =>
+        e.type === 'add' ? `+${e.content}` : e.type === 'remove' ? `-${e.content}` : ` ${e.content}`
+      ).join('\n');
+
+      return {
+        oldStart,
+        oldLines: oldLineCount,
+        newStart,
+        newLines: newLineCount,
+        content: `@@ -${oldStart},${oldLineCount} +${newStart},${newLineCount} @@\n${body}`
+      };
+    });
   }
 
   private mapChangeType(changeType: string): FileDiff['status'] {
@@ -293,6 +379,9 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       error: '🚨'
     };
 
+    // Azure DevOps requires filePath to start with /
+    const filePath = path.startsWith('/') ? path : `/${path}`;
+
     const url = this.getGitApiUrl(
       `/repositories/${this.repository}/pullrequests/${prId}/threads?api-version=7.0`
     );
@@ -303,20 +392,14 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       body: JSON.stringify({
         comments: [{
           parentCommentId: 0,
-          content: `${severityEmoji[severity]} ${body}`,
+          content: body,
           commentType: 'text'
         }],
         status: 'active',
         threadContext: {
-          filePath: path,
-          rightFileStart: {
-            line,
-            offset: 1
-          },
-          rightFileEnd: {
-            line,
-            offset: 1
-          }
+          filePath,
+          rightFileStart: { line, offset: 1 },
+          rightFileEnd: { line, offset: 1 }
         }
       })
     });

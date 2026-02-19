@@ -21,7 +21,8 @@ import { VCSAdapter } from './adapters/vcs/base';
 import { TicketAdapter } from './adapters/ticket/base';
 import { LLMBackend } from './llm/base';
 import { SkillLoader } from './skills/loader';
-import { ReviewContext, ReviewResult, Config } from './types';
+import { ReviewContext, ReviewResult, ReviewComment, Diff, Config } from './types';
+
 
 export class PRReviewAgent {
   private vcs: VCSAdapter;
@@ -29,6 +30,7 @@ export class PRReviewAgent {
   private llm: LLMBackend;
   private skills: SkillLoader;
   private config: Config;
+  private lastDiff: Diff | null = null;
 
   constructor(config: Config) {
     this.config = config;
@@ -89,27 +91,38 @@ export class PRReviewAgent {
     // 5. Run review
     const result = await this.llm.generateReview(context);
 
+    // Cache diff for use in postReview path validation
+    this.lastDiff = diff;
+
     return result;
   }
 
   async postReview(prId: string | number, result: ReviewResult): Promise<void> {
-    const { summary, comments, verdict } = result;
+    const { summary, verdict } = result;
 
-    // Post inline comments
-    for (const comment of comments) {
-      await this.vcs.addInlineComment(
-        prId,
-        comment.path,
-        comment.line,
-        comment.body,
-        comment.severity
-      );
+    // Build a set of canonical diff paths (normalised: no leading slash) for matching
+    const diff = this.lastDiff ?? await this.vcs.getDiff(prId);
+    const diffPathMap = new Map<string, string>(); // normalised → original
+    for (const f of diff.files) {
+      diffPathMap.set(f.path.replace(/^\//, ''), f.path);
     }
 
-    // Submit overall review
+    // Resolve each comment's path against actual diff paths
+    const validComments: ReviewComment[] = [];
+    for (const comment of result.comments) {
+      const normalised = comment.path.replace(/^\//, '');
+      const resolvedPath = diffPathMap.get(normalised);
+      if (!resolvedPath) {
+        console.warn(`⚠️  Skipping comment — path not in diff: ${comment.path}`);
+        continue;
+      }
+      validComments.push({ ...comment, path: resolvedPath });
+    }
+
+    // Submit overall review — body is the model-generated markdown, used as-is
     await this.vcs.submitReview(prId, {
       summary,
-      comments,
+      comments: validComments,
       verdict
     });
   }
