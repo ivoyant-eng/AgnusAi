@@ -90,6 +90,8 @@ export interface ReviewContext {
   config: ReviewConfig;
   /** Static analysis findings from tsc, eslint, semgrep */
   staticFindings?: StaticFinding[];
+  /** Institutional memory rules applicable to this review */
+  memoryRules?: import('./memory/types').MemoryRule[];
 }
 
 export interface ReviewResult {

@@ -53,6 +53,7 @@ import {
 } from './review/checkpoint';
 import { filterByConfidence, estimateConfidence } from './review/precision-filter';
 import { runStaticAnalysis } from './analysis/static-analyzer';
+import { loadRulesForFiles, MemoryRule } from './memory';
 
 /**
  * Result of an incremental review check
@@ -325,6 +326,18 @@ export class PRReviewAgent {
       }
     }
 
+    // 3.6. Load institutional memory rules (P1.3)
+    let memoryRules: MemoryRule[] = [];
+    try {
+      const loadedRules = loadRulesForFiles(files.map(f => f.path));
+      memoryRules = loadedRules.matched;
+      if (memoryRules.length > 0) {
+        console.log(`Memory: ${memoryRules.length}/${loadedRules.total} rules apply to this PR`);
+      }
+    } catch (error: any) {
+      console.warn(`Failed to load memory rules: ${error.message}`);
+    }
+
     // 4. Build context
     const context: ReviewContext = {
       pr,
@@ -333,6 +346,7 @@ export class PRReviewAgent {
       tickets,
       skills: applicableSkills,
       staticFindings: staticFindings.length > 0 ? staticFindings : undefined,
+      memoryRules: memoryRules.length > 0 ? memoryRules : undefined,
       config: this.config.review
     };
 

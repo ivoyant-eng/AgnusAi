@@ -12,6 +12,7 @@ import { UnifiedLLMBackend, UnifiedLLMConfig, ProviderName } from './llm/unified
 import { SkillLoader } from './skills/loader';
 import { PRReviewAgent } from './index';
 import { Config, LLMConfig } from './types';
+import * as memory from './memory';
 
 const program = new Command();
 
@@ -292,5 +293,165 @@ function printMarkdownReview(result: import('./types').ReviewResult): void {
 
   console.log(`\n### Verdict: **${result.verdict}**`);
 }
+
+// ============================================
+// Memory Commands (Institutional Memory - P1.3)
+// ============================================
+
+const memoryCmd = program
+  .command('memory')
+  .description('Manage institutional memory (team decision rules)');
+
+memoryCmd
+  .command('list')
+  .description('List all memory rules')
+  .option('--file <path>', 'Filter by file path')
+  .option('--tag <tag>', 'Filter by tag')
+  .option('--all', 'Include inactive rules')
+  .action((options) => {
+    const rules = memory.listRules({
+      filePath: options.file,
+      tag: options.tag,
+      activeOnly: !options.all,
+    });
+    
+    if (rules.length === 0) {
+      console.log('\n📝 No memory rules found.\n');
+      console.log('Add a rule with: pr-review remember "rule text" --files "pattern"');
+      return;
+    }
+    
+    console.log(`\n📝 Memory Rules (${rules.length}):\n`);
+    for (const rule of rules) {
+      const status = rule.active === false ? ' [inactive]' : '';
+      console.log(`  ${rule.id}${status}`);
+      console.log(`    Rule: ${rule.rule}`);
+      console.log(`    Files: ${rule.files.join(', ')}`);
+      console.log(`    Decided: ${rule.decided}`);
+      if (rule.threadUrl) {
+        console.log(`    Source: ${rule.threadUrl}`);
+      }
+      if (rule.tags && rule.tags.length > 0) {
+        console.log(`    Tags: ${rule.tags.join(', ')}`);
+      }
+      console.log('');
+    }
+  });
+
+memoryCmd
+  .command('show <id>')
+  .description('Show a specific memory rule')
+  .action((id) => {
+    const rule = memory.getRule(id);
+    
+    if (!rule) {
+      console.error(`Rule not found: ${id}`);
+      process.exit(1);
+    }
+    
+    console.log('\n📝 Memory Rule:\n');
+    console.log(yaml.dump(rule, { indent: 2 }));
+  });
+
+memoryCmd
+  .command('remove <id>')
+  .description('Remove a memory rule')
+  .action((id) => {
+    const removed = memory.removeRule(id);
+    
+    if (removed) {
+      console.log(`✅ Removed rule: ${id}`);
+    } else {
+      console.error(`Rule not found: ${id}`);
+      process.exit(1);
+    }
+  });
+
+memoryCmd
+  .command('clear')
+  .description('Clear all memory rules')
+  .option('--force', 'Skip confirmation')
+  .action((options) => {
+    if (!options.force) {
+      console.log('⚠️  This will delete all memory rules. Use --force to confirm.');
+      process.exit(1);
+    }
+    
+    const count = memory.clearRules();
+    console.log(`✅ Cleared ${count} rules.`);
+  });
+
+memoryCmd
+  .command('stats')
+  .description('Show memory statistics')
+  .action(() => {
+    const stats = memory.getMemoryStats();
+    
+    console.log('\n📊 Memory Statistics:\n');
+    console.log(`  Total rules: ${stats.totalRules}`);
+    console.log(`  Active rules: ${stats.activeRules}`);
+    console.log(`  Inactive rules: ${stats.inactiveRules}`);
+    console.log(`  Memory path: ${stats.memoryPath}`);
+    if (stats.createdAt) {
+      console.log(`  Created: ${stats.createdAt}`);
+    }
+    if (stats.updatedAt) {
+      console.log(`  Last updated: ${stats.updatedAt}`);
+    }
+    console.log('');
+  });
+
+memoryCmd
+  .command('export')
+  .description('Export rules for backup')
+  .option('--output <file>', 'Output file (default: stdout)')
+  .action((options) => {
+    const yamlContent = memory.exportRules();
+    
+    if (options.output) {
+      fs.writeFileSync(options.output, yamlContent, 'utf-8');
+      console.log(`✅ Exported rules to ${options.output}`);
+    } else {
+      console.log(yamlContent);
+    }
+  });
+
+memoryCmd
+  .command('import <file>')
+  .description('Import rules from a YAML file')
+  .option('--overwrite', 'Overwrite existing rules with same ID')
+  .action((file, options) => {
+    const content = fs.readFileSync(file, 'utf-8');
+    const count = memory.importRules(content, options.overwrite);
+    console.log(`✅ Imported ${count} rules.`);
+  });
+
+// Quick command to add a rule
+program
+  .command('remember <rule>')
+  .description('Add a memory rule from a team decision')
+  .option('--files <patterns>', 'File patterns (comma-separated)', '**')
+  .option('--url <url>', 'URL to original discussion')
+  .option('--by <who>', 'Who decided this rule')
+  .option('--tags <tags>', 'Tags (comma-separated)')
+  .action((rule, options) => {
+    const files = options.files.split(',').map((f: string) => f.trim());
+    const tags = options.tags ? options.tags.split(',').map((t: string) => t.trim()) : undefined;
+    
+    const newRule = memory.addRule({
+      rule,
+      files,
+      threadUrl: options.url,
+      decidedBy: options.by,
+      tags,
+    });
+    
+    console.log('\n✅ Rule remembered:\n');
+    console.log(`  ID: ${newRule.id}`);
+    console.log(`  Rule: ${newRule.rule}`);
+    console.log(`  Files: ${newRule.files.join(', ')}`);
+    console.log(`  Decided: ${newRule.decided}`);
+    console.log('\nThis rule will be enforced in future PR reviews.\n');
+  });
 
 program.parse();

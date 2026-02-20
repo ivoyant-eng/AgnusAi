@@ -1,9 +1,10 @@
 // Shared prompt builder — provider-agnostic
 
 import { ReviewContext, Diff, StaticFinding } from '../types';
+import { formatRulesForPrompt } from '../memory/loader';
 
 export function buildReviewPrompt(context: ReviewContext): string {
-  const { pr, diff, skills, config, staticFindings } = context;
+  const { pr, diff, skills, config, staticFindings, memoryRules } = context;
 
   const skillContext = skills.length > 0
     ? `\n## Review Skills Applied\n${skills.map(s => s.content).join('\n\n')}`
@@ -11,6 +12,10 @@ export function buildReviewPrompt(context: ReviewContext): string {
 
   const staticAnalysisSection = staticFindings && staticFindings.length > 0
     ? `\n## Static Analysis Findings\nThe following issues were detected by static analysis tools. Consider these as context — they may inform your review but are NOT the primary focus.\n${formatStaticFindings(staticFindings)}\n`
+    : '';
+
+  const memoryRulesSection = memoryRules && memoryRules.length > 0
+    ? `\n${formatRulesForPrompt(memoryRules)}\n`
     : '';
 
   const fileList = diff.files
@@ -39,7 +44,7 @@ ${fileList}
 
 ## Diff
 ${diffResult.content}
-${staticAnalysisSection}${skillContext}
+${staticAnalysisSection}${memoryRulesSection}${skillContext}
 ${truncationWarning}
 
 ## Review Instructions
