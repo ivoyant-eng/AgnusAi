@@ -105,3 +105,26 @@ vcs:
 - `MEMORY.md` — Full project memory, roadmap, stress test procedures
 - `ADR-001-architecture.md` — Architecture decisions
 - `CONTRIBUTING.md` — How to add providers/adapters
+
+## Claude Code Integration
+
+For complex coding tasks, use Claude Code CLI:
+
+```bash
+cd /root/.openclaw/workspace/projects/pr-review-agent
+ollama launch claude --model qwen3-coder-next
+```
+
+**When to use Claude Code:**
+- Complex refactoring across multiple files
+- Architecture exploration and analysis
+- Multi-file feature implementation
+- Deep debugging with codebase search
+
+**When to use Agnus agent:**
+- Quick fixes and git operations
+- Stress testing and validation
+- PR management and updates
+- Automated review runs
+
+See `/root/.openclaw/workspace/skills/claude-code/SKILL.md` for full documentation.

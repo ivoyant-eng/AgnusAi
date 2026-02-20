@@ -44,11 +44,22 @@ export function parseCommentBlocks(response: string): ReviewComment[] {
       continue;
     }
 
+    // Extract confidence score from [Confidence: X.X] marker
+    const confidenceMatch = trimmedBody.match(/\[Confidence:\s*([0-9.]+)\]/i);
+    let confidence: number | undefined;
+    if (confidenceMatch) {
+      const parsed = parseFloat(confidenceMatch[1]);
+      if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) {
+        confidence = parsed;
+      }
+    }
+
     comments.push({
       path: path.trim(),
       line: lineNum,
       body: trimmedBody,
       severity: detectSeverity(trimmedBody),
+      confidence,
     });
   }
 

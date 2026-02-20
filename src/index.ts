@@ -29,6 +29,15 @@ export {
   CHECKPOINT_USER_AGENT
 } from './review/checkpoint';
 
+// Export precision filter (P1: Precision-First Output)
+export {
+  filterByConfidence,
+  calculatePrecisionMetrics,
+  estimateConfidence,
+  type PrecisionFilterResult,
+  type PrecisionFilterConfig
+} from './review/precision-filter';
+
 export * from './types';
 
 import { VCSAdapter } from './adapters/vcs/base';
@@ -42,6 +51,7 @@ import {
   createCheckpoint,
   generateCheckpointComment
 } from './review/checkpoint';
+import { filterByConfidence, estimateConfidence } from './review/precision-filter';
 
 /**
  * Result of an incremental review check
@@ -308,7 +318,35 @@ export class PRReviewAgent {
     };
 
     // 5. Run review
-    const result = await this.llm.generateReview(context);
+    let result = await this.llm.generateReview(context);
+
+    // P1: Precision-First Output - filter by confidence threshold
+    const precisionThreshold = this.config.review?.precisionThreshold ?? 0.7;
+    const filterResult = filterByConfidence(result.comments, { threshold: precisionThreshold });
+
+    // Estimate confidence for comments without explicit scores
+    const commentsWithEstimatedConfidence = filterResult.passed.map(c => ({
+      ...c,
+      confidence: c.confidence ?? estimateConfidence(c)
+    }));
+
+    if (filterResult.emptyMessage) {
+      console.log(`🎯 Precision filter: 0/${result.comments.length} comments passed threshold (${precisionThreshold})`);
+      return {
+        summary: filterResult.emptyMessage,
+        comments: [],
+        suggestions: [],
+        verdict: 'comment'
+      };
+    }
+
+    console.log(`🎯 Precision filter: ${filterResult.passed.length}/${result.comments.length} comments passed threshold (${precisionThreshold})`);
+
+    // Apply precision filter to result
+    result = {
+      ...result,
+      comments: commentsWithEstimatedConfidence
+    };
 
     // Cache diff for use in postReview path validation
     this.lastDiff = diff;

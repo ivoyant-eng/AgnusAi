@@ -108,6 +108,24 @@ If you propose a fix, implement it and please make it concise.
 
 VERDICT: approve|request_changes|comment
 
+## Confidence Scoring (REQUIRED)
+For EACH comment, include a confidence score on a scale of 0.0 to 1.0 indicating how certain you are that this is a real, actionable issue.
+
+Format: Add [Confidence: X.X] at the end of each comment body, before the VERDICT line.
+
+Scoring guide:
+- 0.9-1.0: Definite bug, security vulnerability, or clear correctness issue
+- 0.7-0.9: Likely issue with clear impact, good confidence
+- 0.5-0.7: Potential issue, may be style/preference
+- 0.3-0.5: Speculative, may be false positive
+- 0.0-0.3: Low confidence, likely noise
+
+Example:
+[File: /src/auth.ts, Line: 42]
+**Suggestion:** ...comment body...
+<details>...</details>
+[Confidence: 0.85]
+
 RULES:
 - The [File:, Line:] marker must use the EXACT path from the diff (including any leading slash)
 - The line number must appear in the diff
