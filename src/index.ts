@@ -64,6 +64,7 @@ export class PRReviewAgent {
   private skills: SkillLoader;
   private config: Config;
   private lastDiff: Diff | null = null;
+  private checkpointHandled: boolean = false;
 
   constructor(config: Config) {
     this.config = config;
@@ -121,6 +122,9 @@ export class PRReviewAgent {
     prId: string | number,
     options: IncrementalReviewOptions = {}
   ): Promise<ReviewResult> {
+    // Reset checkpoint flag for new review
+    this.checkpointHandled = false;
+
     // Check for checkpoint
     const checkResult = await this.checkIncremental(prId);
 
@@ -200,7 +204,8 @@ export class PRReviewAgent {
 
     // Update checkpoint if not skipped
     if (!options.skipCheckpoint && checkResult.checkpointCommentId) {
-      await this.updateCheckpoint(prId, result, checkResult.checkpointCommentId);
+      await this.updateCheckpoint(prId, result, checkResult.checkpointCommentId, checkpoint);
+      this.checkpointHandled = true;
     }
 
     return result;
@@ -208,18 +213,25 @@ export class PRReviewAgent {
 
   /**
    * Create or update checkpoint after review
+   * Merges filesReviewed from previous checkpoint to track all reviewed files
    */
   private async updateCheckpoint(
     prId: string | number,
     result: ReviewResult,
-    existingCommentId?: number
+    existingCommentId?: number,
+    previousCheckpoint?: ReviewCheckpoint
   ): Promise<void> {
     const github = this.vcs as GitHubAdapter;
     const headSha = await github.getHeadSha(prId);
 
+    // Merge files: start with previously reviewed files, add current ones, deduplicate
+    const previousFiles = previousCheckpoint?.filesReviewed || [];
+    const currentFiles = result.comments.map(c => c.path);
+    const allFilesReviewed = [...new Set([...previousFiles, ...currentFiles])];
+
     const checkpoint = createCheckpoint(
       headSha,
-      result.comments.map(c => c.path),
+      allFilesReviewed,
       result.comments.length,
       result.verdict
     );
@@ -234,6 +246,9 @@ export class PRReviewAgent {
   }
 
   async review(prId: string | number): Promise<ReviewResult> {
+    // Reset checkpoint flag for new review
+    this.checkpointHandled = false;
+
     // 1. Fetch PR data
     const pr = await this.vcs.getPR(prId);
     const diff = await this.vcs.getDiff(prId);
@@ -306,27 +321,59 @@ export class PRReviewAgent {
       verdict
     });
 
-    // Create checkpoint after successful review
-    if (this.vcs instanceof GitHubAdapter) {
+    // Create checkpoint after successful review (only if not already handled by incrementalReview)
+    if (!this.checkpointHandled && this.vcs instanceof GitHubAdapter) {
       await this.createCheckpointAfterReview(prId, result);
     }
   }
 
   /**
    * Create checkpoint comment after review
+   * If checkpoint already exists, update it instead of creating a new one
+   * Also deletes any duplicate checkpoint comments
    */
   private async createCheckpointAfterReview(prId: string | number, result: ReviewResult): Promise<void> {
     const github = this.vcs as GitHubAdapter;
     const headSha = await github.getHeadSha(prId);
 
+    // Check for existing checkpoint
+    const comments = await github.getPRComments(prId);
+    const found = findCheckpointComment(comments);
+
+    // Merge filesReviewed if there was a previous checkpoint
+    const previousFiles = found?.checkpoint.filesReviewed || [];
+    const currentFiles = result.comments.map(c => c.path);
+    const allFilesReviewed = [...new Set([...previousFiles, ...currentFiles])];
+
     const checkpoint = createCheckpoint(
       headSha,
-      result.comments.map(c => c.path),
+      allFilesReviewed,
       result.comments.length,
       result.verdict
     );
 
-    console.log('📝 Creating checkpoint comment...');
-    await github.createCheckpointComment(prId, checkpoint);
+    if (found) {
+      // Update existing checkpoint
+      console.log('📝 Updating existing checkpoint comment...');
+      await github.updateCheckpointComment(found.comment.id, checkpoint);
+      
+      // Delete any other duplicate checkpoint comments
+      const allCheckpointComments = comments.filter(c => 
+        c.body.includes('AGNUSAI_CHECKPOINT') && c.id !== found.comment.id
+      );
+      
+      for (const duplicate of allCheckpointComments) {
+        console.log(`🗑️  Deleting duplicate checkpoint comment ${duplicate.id}`);
+        try {
+          await github.deleteCheckpointComment(duplicate.id);
+        } catch (error: any) {
+          console.warn(`Failed to delete duplicate checkpoint: ${error.message}`);
+        }
+      }
+    } else {
+      // Create new checkpoint
+      console.log('📝 Creating checkpoint comment...');
+      await github.createCheckpointComment(prId, checkpoint);
+    }
   }
 }

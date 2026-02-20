@@ -330,6 +330,7 @@ export class CommentManager {
   
   /**
    * Handle checkpoint creation/update
+   * Merges filesReviewed from previous checkpoint and deletes duplicates
    */
   private async handleCheckpoint(
     prId: string | number,
@@ -344,14 +345,24 @@ export class CommentManager {
       // Find existing checkpoint
       const existing = await this.vcs.findCheckpointComment!(prId);
       
-      // Get files reviewed
+      // Get files reviewed from current diff
       const diff = await this.vcs.getDiff(prId);
-      const filesReviewed = diff.files.map(f => f.path);
+      const currentFiles = diff.files.map(f => f.path);
+      
+      // Merge with previous filesReviewed if exists
+      let allFilesReviewed = currentFiles;
+      if (existing) {
+        // Parse the checkpoint from the existing comment
+        const prevCheckpoint = this.parseCheckpointFromComment(existing.body);
+        if (prevCheckpoint?.filesReviewed) {
+          allFilesReviewed = [...new Set([...prevCheckpoint.filesReviewed, ...currentFiles])];
+        }
+      }
       
       const checkpoint: ReviewCheckpoint = {
         sha: this.commitSha,
         timestamp: Math.floor(Date.now() / 1000),
-        filesReviewed,
+        filesReviewed: allFilesReviewed,
         commentCount,
         verdict
       };
@@ -359,6 +370,24 @@ export class CommentManager {
       if (existing) {
         // Update existing checkpoint
         await this.vcs.updateCheckpointComment!(existing.id, checkpoint);
+        
+        // Delete any other checkpoint comments (duplicates)
+        if (this.vcs.getPRComments && this.vcs.deleteCheckpointComment) {
+          const allComments = await this.vcs.getPRComments(prId);
+          const duplicates = allComments.filter(c => 
+            c.body.includes('AGNUSAI_CHECKPOINT') && c.id !== existing.id
+          );
+          
+          for (const dup of duplicates) {
+            console.log(`🗑️  Deleting duplicate checkpoint comment ${dup.id}`);
+            try {
+              await this.vcs.deleteCheckpointComment(dup.id);
+            } catch (error: any) {
+              console.warn(`Failed to delete duplicate checkpoint: ${error.message}`);
+            }
+          }
+        }
+        
         return { created: false, updated: true, commentId: existing.id };
       } else {
         // Create new checkpoint
@@ -368,6 +397,34 @@ export class CommentManager {
     } catch (error: any) {
       console.error('Failed to manage checkpoint:', error);
       return { created: false, updated: false };
+    }
+  }
+  
+  /**
+   * Parse checkpoint from comment body
+   */
+  private parseCheckpointFromComment(body: string): ReviewCheckpoint | null {
+    const marker = '<!-- AGNUSAI_CHECKPOINT:';
+    const suffix = ' -->';
+    const startIndex = body.indexOf(marker);
+    if (startIndex === -1) return null;
+    
+    const endIndex = body.indexOf(suffix, startIndex);
+    if (endIndex === -1) return null;
+    
+    const jsonStr = body.slice(startIndex + marker.length, endIndex);
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (!parsed.sha || typeof parsed.timestamp !== 'number') return null;
+      return {
+        sha: parsed.sha,
+        timestamp: parsed.timestamp,
+        filesReviewed: Array.isArray(parsed.filesReviewed) ? parsed.filesReviewed : [],
+        commentCount: typeof parsed.commentCount === 'number' ? parsed.commentCount : 0,
+        verdict: parsed.verdict || 'comment'
+      };
+    } catch {
+      return null;
     }
   }
   

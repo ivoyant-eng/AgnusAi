@@ -102,7 +102,8 @@ program
       let result;
       if (options.incremental && options.vcs === 'github') {
         result = await agent.incrementalReview(Number(options.pr), {
-          forceFull: options.forceFull
+          forceFull: options.forceFull,
+          skipCheckpoint: options.dryRun
         });
       } else {
         if (options.incremental) {

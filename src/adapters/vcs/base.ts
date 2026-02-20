@@ -135,6 +135,14 @@ export interface VCSAdapter {
    * @param checkpoint New checkpoint data
    */
   updateCheckpointComment?(commentId: string | number, checkpoint: ReviewCheckpoint): Promise<void>;
+  
+  /**
+   * Delete a checkpoint comment
+   * Used for cleaning up duplicate checkpoints
+   * 
+   * @param commentId Comment ID to delete
+   */
+  deleteCheckpointComment?(commentId: string | number): Promise<void>;
 
   // ============================================
   // File Operations

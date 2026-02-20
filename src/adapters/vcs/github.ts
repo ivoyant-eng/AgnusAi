@@ -106,12 +106,15 @@ export class GitHubAdapter implements VCSAdapter {
       else if (fileInfo.status === 'removed') status = 'deleted';
       else if (fileInfo.status === 'renamed') status = 'renamed';
 
+      // Handle both 'filename' (from GitHub API) and 'path' (from compareCommits)
+      const filePath = fileInfo.filename || fileInfo.path;
+      
       fileDiffs.push({
-        path: fileInfo.filename,
+        path: filePath,
         oldPath: fileInfo.previous_filename,
         status,
-        additions: fileInfo.additions,
-        deletions: fileInfo.deletions,
+        additions: fileInfo.additions || 0,
+        deletions: fileInfo.deletions || 0,
         hunks
       });
     }
@@ -372,15 +375,16 @@ export class GitHubAdapter implements VCSAdapter {
         commit_id: pr.head.sha
       });
     } catch (error: any) {
-      // Fall back to COMMENT if REQUEST_CHANGES fails on own PR
-      if (review.verdict === 'request_changes' && error.message?.includes('your own pull request')) {
-        console.log('⚠️  Cannot request changes on own PR, posting as comment instead...');
+      // Fall back to COMMENT if APPROVE or REQUEST_CHANGES fails on own PR
+      const isOwnPrError = error.message?.includes('your own pull request');
+      if (isOwnPrError && (review.verdict === 'request_changes' || review.verdict === 'approve')) {
+        console.log(`⚠️  Cannot ${review.verdict === 'approve' ? 'approve' : 'request changes on'} own PR, posting as comment instead...`);
         await this.octokit.pulls.createReview({
           owner: this.owner,
           repo: this.repo,
           pull_number: Number(prId),
           event: 'COMMENT',
-          body: review.summary + '\n\n> ⚠️ **Note:** Would have requested changes, but this is your own PR.',
+          body: review.summary + `\n\n> ⚠️ **Note:** Would have ${review.verdict === 'approve' ? 'approved' : 'requested changes'}, but this is your own PR.`,
           comments,
           commit_id: pr.head.sha
         });

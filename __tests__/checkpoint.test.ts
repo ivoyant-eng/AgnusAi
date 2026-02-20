@@ -184,7 +184,7 @@ Some text after`;
       expect(result?.checkpoint.sha).toBe('custom');
     });
 
-    it('should return first checkpoint when multiple exist', () => {
+    it('should return newest checkpoint when multiple exist', () => {
       const comments: PRComment[] = [
         {
           id: 1,
@@ -203,7 +203,8 @@ Some text after`;
       ];
 
       const result = findCheckpointComment(comments);
-      expect(result?.checkpoint.sha).toBe('first');
+      // Should return the newest checkpoint (highest timestamp)
+      expect(result?.checkpoint.sha).toBe('second');
     });
   });
 

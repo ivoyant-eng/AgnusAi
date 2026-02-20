@@ -109,6 +109,7 @@ export function createCheckpoint(
 
 /**
  * Find the checkpoint comment among PR comments
+ * Returns the NEWEST checkpoint by timestamp (not the first one found)
  * 
  * @param comments List of PR comments to search
  * @param botName Optional bot name to look for (defaults to common patterns)
@@ -127,8 +128,18 @@ export function findCheckpointComment(
     'github-actions[bot]'
   ].filter(Boolean);
 
+  // Find ALL checkpoints, sort by timestamp, return newest
+  const allCheckpoints: Array<{ comment: PRComment; checkpoint: ReviewCheckpoint }> = [];
+
   for (const comment of comments) {
-    // Check if this is a bot comment
+    // Check if this comment has our checkpoint marker
+    const checkpoint = parseCheckpoint(comment.body);
+    if (checkpoint) {
+      allCheckpoints.push({ comment, checkpoint });
+      continue;
+    }
+
+    // Also check bot patterns for backwards compatibility
     const isBot = comment.user.type === 'Bot' || 
                   botPatterns.some(pattern => 
                     comment.user.login.toLowerCase().includes(pattern?.toLowerCase() || '')
@@ -138,14 +149,21 @@ export function findCheckpointComment(
       continue;
     }
 
-    // Try to parse checkpoint from this comment
-    const checkpoint = parseCheckpoint(comment.body);
-    if (checkpoint) {
-      return { comment, checkpoint };
+    // Try to parse checkpoint from this bot comment
+    const checkpoint2 = parseCheckpoint(comment.body);
+    if (checkpoint2) {
+      allCheckpoints.push({ comment, checkpoint: checkpoint2 });
     }
   }
 
-  return null;
+  // If no checkpoints found, return null
+  if (allCheckpoints.length === 0) {
+    return null;
+  }
+
+  // Sort by timestamp (newest first) and return the newest
+  allCheckpoints.sort((a, b) => b.checkpoint.timestamp - a.checkpoint.timestamp);
+  return allCheckpoints[0];
 }
 
 /**
