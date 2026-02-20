@@ -2,10 +2,8 @@
 
 import { ReviewContext, Diff } from '../types';
 
-const MAX_DIFF_CHARS = 30000;
-
 export function buildReviewPrompt(context: ReviewContext): string {
-  const { pr, diff, skills } = context;
+  const { pr, diff, skills, config } = context;
 
   const skillContext = skills.length > 0
     ? `\n## Review Skills Applied\n${skills.map(s => s.content).join('\n\n')}`
@@ -14,6 +12,13 @@ export function buildReviewPrompt(context: ReviewContext): string {
   const fileList = diff.files
     .map(f => `- ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`)
     .join('\n');
+
+  const maxChars = config?.maxDiffSize ?? 30000;
+  const diffResult = buildDiffSummary(diff, maxChars);
+
+  const truncationWarning = diffResult.truncated
+    ? `\n⚠️ IMPORTANT: This diff was truncated. You have only seen the first portion (${diffResult.truncatedCount} more files not shown).\nDo NOT reference, guess, or comment on files not shown above.\nReview ONLY what is shown in the diff.\n`
+    : '';
 
   return `You are an expert code reviewer. Review this pull request and provide detailed, actionable feedback.
 
@@ -29,8 +34,9 @@ ${pr.description || 'No description provided.'}
 ${fileList}
 
 ## Diff
-${buildDiffSummary(diff)}
+${diffResult.content}
 ${skillContext}
+${truncationWarning}
 
 ## Review Instructions
 1. Analyse the diff for issues: correctness, security, performance, maintainability
@@ -106,24 +112,27 @@ RULES:
 - The [File:, Line:] marker must use the EXACT path from the diff (including any leading slash)
 - The line number must appear in the diff
 - Output the full markdown body for every comment — do not shorten or summarise the sections
-- If the PR looks good output VERDICT: approve with no comments`;
+- If the PR looks good output VERDICT: approve with no comments
+- NEVER comment on whether a specific package/library version number is valid, exists, or is outdated. Your training data has a knowledge cutoff and package versions change constantly — you will be wrong. Skip ALL observations about version numbers, semver ranges, or whether a version is "the latest". Focus only on code logic, patterns, and correctness.`;
 }
 
-export function buildDiffSummary(diff: Diff): string {
-  let summary = '';
+export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { content: string; truncated: boolean; truncatedCount: number } {
+  let content = '';
   let currentSize = 0;
 
-  for (const file of diff.files) {
+  for (let i = 0; i < diff.files.length; i++) {
+    const file = diff.files[i];
     const fileDiff = `--- ${file.path}\n+++ ${file.path}\n${file.hunks.map(h => h.content).join('\n')}\n`;
 
-    if (currentSize + fileDiff.length > MAX_DIFF_CHARS) {
-      summary += `\n... [Diff truncated — ${diff.files.length - diff.files.indexOf(file)} more files]`;
-      break;
+    if (currentSize + fileDiff.length > maxChars) {
+      const truncatedCount = diff.files.length - i;
+      content += `\n... [Diff truncated — ${truncatedCount} more files]`;
+      return { content, truncated: true, truncatedCount };
     }
 
-    summary += fileDiff;
+    content += fileDiff;
     currentSize += fileDiff.length;
   }
 
-  return summary;
+  return { content, truncated: false, truncatedCount: 0 };
 }

@@ -6,9 +6,19 @@ export function parseReviewResponse(response: string): ReviewResult {
   const summaryMatch = response.match(/SUMMARY:\s*([\s\S]*?)(?=\[File:|VERDICT:|$)/i);
   const summary = summaryMatch ? summaryMatch[1].trim() : response.slice(0, 500);
 
+  // Detect truncated response: has [File: markers but no VERDICT at all
+  const hasFileMarker = /\[File:/i.test(response);
+  const hasVerdict = /VERDICT:/i.test(response);
+  if (hasFileMarker && !hasVerdict) {
+    console.warn('[AgnusAI] LLM response appears truncated — contains [File: markers but no VERDICT. Some comments may be incomplete.');
+  }
+
   const comments = parseCommentBlocks(response);
 
   const verdictMatch = response.match(/VERDICT:\s*(approve|request_changes|comment)/i);
+  if (!verdictMatch) {
+    console.warn('[AgnusAI] No VERDICT in LLM response, defaulting to comment');
+  }
   const verdict = verdictMatch
     ? (verdictMatch[1].toLowerCase() as ReviewResult['verdict'])
     : 'comment';
@@ -28,9 +38,15 @@ export function parseCommentBlocks(response: string): ReviewComment[] {
     const trimmedBody = body.trim();
     if (!trimmedBody) continue;
 
+    const lineNum = parseInt(line, 10);
+    if (!isFinite(lineNum) || lineNum < 1) {
+      console.warn(`[AgnusAI] Skipping comment with invalid line number "${line}" in file "${path.trim()}"`);
+      continue;
+    }
+
     comments.push({
       path: path.trim(),
-      line: parseInt(line),
+      line: lineNum,
       body: trimmedBody,
       severity: detectSeverity(trimmedBody),
     });

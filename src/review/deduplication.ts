@@ -1,6 +1,7 @@
 // Comment Deduplication and Edge Case Handling
 // Comprehensive logic to prevent duplicate/outdated comments
 
+import { createHash } from 'crypto';
 import {
   ReviewComment,
   DetailedReviewComment,
@@ -57,8 +58,6 @@ export const DEFAULT_DEDUP_CONFIG: DeduplicationConfig = {
     'node_modules/**', 'vendor/**', 'third_party/**',
     // Generated files
     '*.generated.*', '*.gen.*', '*.pb.go', '*_pb2.py',
-    // Config/Data files
-    '*.json', '*.yaml', '*.yml', '*.toml', '*.ini',
     // Documentation (optional)
     '*.md', '*.txt', 'LICENSE*'
   ],
@@ -97,8 +96,46 @@ const ALWAYS_SKIP_PATTERNS = [
   /\.min\.(js|css|mjs)$/i,
   // Generated type definitions
   /\.d\.ts$/,
-  /\.d\.ts\.map$/
+  /\.d\.ts\.map$/,
+  // Protocol Buffers compiled output
+  /\.pb\.(js|ts|jsx|tsx)$/i,
+  // gRPC compiled output
+  /_pb\.(js|ts|jsx|tsx)$/i,
+  // GraphQL / Apollo codegen
+  /\.generated\.(ts|js|tsx|jsx)$/i,
+  /\.gen\.(ts|js|tsx|jsx)$/i,
+  /__generated__\//,
 ];
+
+/**
+ * Patterns that indicate the LLM is making a claim about a package version —
+ * these are unreliable due to knowledge cutoff and must be filtered out.
+ */
+const VERSION_CLAIM_PATTERNS = [
+  // "version X does not exist / is invalid / doesn't exist"
+  /version\s+`?[\d]+\.[\d][\d.]*`?\s+(does not exist|doesn't exist|is invalid|is not (published|available|released|real))/i,
+  // "the latest (major/stable/current) version is X"
+  /\b(latest|current|stable)\s+(major\s+)?version\s+is\s+[\d]+\./i,
+  // "as of current releases / as of now, X is at version"
+  /as of (current|today|now|this writing).{0,40}version\s+[\d]+\./i,
+  // "X doesn't exist as of current releases"
+  /doesn'?t exist as of/i,
+  // "the current latest X version is" / "X's current latest"
+  /current(ly)?[\s,]+latest.{0,30}version/i,
+  // "there is no version X" / "no such version"
+  /\bthere is no .{0,30}version\s+[\d]+/i,
+  // "update the version to X (e.g., ^X.Y.Z)" when claiming latest
+  /update.{0,40}to the latest (stable )?release/i,
+  // "Storybook / package X is only at version"
+  /is only at version\s+[\d]+\./i,
+];
+
+/**
+ * Returns true if the comment body makes unreliable version-existence claims
+ */
+export function containsVersionClaim(body: string): boolean {
+  return VERSION_CLAIM_PATTERNS.some(pattern => pattern.test(body));
+}
 
 /**
  * Dismissal keywords in comment replies
@@ -137,7 +174,8 @@ export type FilterReason =
   | 'invalid_line_number'
   | 'empty_comment'
   | 'test_file_lenient'
-  | 'outdated_review';
+  | 'outdated_review'
+  | 'version_claim';
 
 /**
  * Result of filtering a single comment
@@ -206,18 +244,21 @@ export function isAgnusaiComment(comment: { body: string }): boolean {
 }
 
 /**
- * Check if a comment was dismissed by user
+ * Check if a comment was dismissed by user replies
  */
-export function isCommentDismissed(comment: DetailedReviewComment): boolean {
-  // Check for replies containing dismissal keywords
-  const body = comment.body.toLowerCase();
-  
-  for (const keyword of DISMISSAL_KEYWORDS) {
-    if (body.includes(keyword.toLowerCase())) {
-      return true;
+export function isCommentDismissed(comment: DetailedReviewComment, allComments: DetailedReviewComment[]): boolean {
+  // Find user replies to this comment (not the comment itself)
+  const replies = allComments.filter(c => c.inReplyToId === comment.id);
+
+  for (const reply of replies) {
+    const body = reply.body.toLowerCase();
+    for (const keyword of DISMISSAL_KEYWORDS) {
+      if (body.includes(keyword.toLowerCase())) {
+        return true;
+      }
     }
   }
-  
+
   return false;
 }
 
@@ -325,18 +366,8 @@ export function trackLineMovement(file: FileDiff): Map<number, number> {
  * Generate a unique issue ID based on comment content
  */
 export function generateIssueId(comment: ReviewComment): string {
-  // Create a simple hash of path + line + first 50 chars of body
-  const content = `${comment.path}:${comment.line}:${comment.body.slice(0, 50)}`;
-  
-  // Simple hash function
-  let hash = 0;
-  for (let i = 0; i < content.length; i++) {
-    const char = content.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash; // Convert to 32bit integer
-  }
-  
-  return `issue-${Math.abs(hash).toString(16)}`;
+  const content = `${comment.path}:${comment.line}:${comment.body}`;
+  return 'issue-' + createHash('sha256').update(content).digest('hex').slice(0, 16);
 }
 
 /**
@@ -404,6 +435,7 @@ export function filterComments(
       comment,
       existingByPathLine,
       existingByPathIssue,
+      existingComments,
       fileDiffs,
       fileChangedLines,
       fileLineMovements,
@@ -442,6 +474,7 @@ function shouldPostComment(
   comment: ReviewComment,
   existingByPathLine: Map<string, DetailedReviewComment>,
   existingByPathIssue: Map<string, DetailedReviewComment>,
+  allExistingComments: DetailedReviewComment[],
   fileDiffs: Map<string, FileDiff>,
   fileChangedLines: Map<string, Set<number>>,
   fileLineMovements: Map<string, Map<number, number>>,
@@ -458,7 +491,12 @@ function shouldPostComment(
   if (!comment.body || comment.body.trim().length === 0) {
     return { comment, shouldPost: false, reason: 'empty_comment' };
   }
-  
+
+  // Edge case: LLM is making unreliable version-existence claims (knowledge cutoff)
+  if (containsVersionClaim(comment.body)) {
+    return { comment, shouldPost: false, reason: 'version_claim' };
+  }
+
   // Edge case: Binary/generated files
   if (shouldSkipFile(comment.path, config)) {
     return { comment, shouldPost: false, reason: 'binary_file' };
@@ -523,7 +561,7 @@ function shouldPostComment(
   }
   
   // Edge case: Comment was dismissed
-  if (existingIssue && isCommentDismissed(existingIssue)) {
+  if (existingIssue && isCommentDismissed(existingIssue, allExistingComments)) {
     return { 
       comment, 
       shouldPost: false, 

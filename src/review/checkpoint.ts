@@ -60,7 +60,8 @@ export function parseCheckpoint(commentBody: string): ReviewCheckpoint | null {
       commentCount: typeof parsed.commentCount === 'number' ? parsed.commentCount : 0,
       verdict: parsed.verdict || 'comment'
     };
-  } catch {
+  } catch (error: any) {
+    console.warn(`[AgnusAI] Malformed checkpoint JSON, falling back to full review. Snippet: "${jsonStr.slice(0, 80)}..." Error: ${error.message}`);
     return null;
   }
 }
