@@ -176,3 +176,70 @@ export interface LLMConfig {
   baseUrl?: string;
   apiKey?: string;
 }
+
+// ============================================
+// Incremental Review Checkpoint Types
+// ============================================
+
+/**
+ * Represents a checkpoint for incremental PR reviews.
+ * Stored in a PR comment body as HTML comment metadata.
+ */
+export interface ReviewCheckpoint {
+  /** The SHA of the last reviewed commit */
+  sha: string;
+  /** Unix timestamp when the checkpoint was created */
+  timestamp: number;
+  /** List of files that were reviewed */
+  filesReviewed: string[];
+  /** Number of comments from the last review */
+  commentCount: number;
+  /** Verdict from the last review */
+  verdict: 'approve' | 'request_changes' | 'comment';
+}
+
+/**
+ * Result of comparing two commits
+ */
+export interface CommitComparison {
+  /** The base commit SHA */
+  baseSha: string;
+  /** The head commit SHA */
+  headSha: string;
+  /** Status of the comparison */
+  status: 'ahead' | 'behind' | 'diverged' | 'identical';
+  /** Number of commits ahead */
+  aheadBy: number;
+  /** Number of commits behind */
+  behindBy: number;
+  /** Files changed between base and head */
+  files: FileDiff[];
+  /** Total additions */
+  additions: number;
+  /** Total deletions */
+  deletions: number;
+}
+
+/**
+ * Information about a PR comment
+ */
+export interface PRComment {
+  id: number;
+  body: string;
+  user: {
+    login: string;
+    type: string;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Options for incremental review
+ */
+export interface IncrementalReviewOptions {
+  /** Force a full review instead of incremental */
+  forceFull?: boolean;
+  /** Skip updating the checkpoint after review */
+  skipCheckpoint?: boolean;
+}
