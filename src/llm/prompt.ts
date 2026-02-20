@@ -1,12 +1,21 @@
 // Shared prompt builder — provider-agnostic
 
-import { ReviewContext, Diff } from '../types';
+import { ReviewContext, Diff, StaticFinding } from '../types';
+import { formatRulesForPrompt } from '../memory/loader';
 
 export function buildReviewPrompt(context: ReviewContext): string {
-  const { pr, diff, skills, config } = context;
+  const { pr, diff, skills, config, staticFindings, memoryRules } = context;
 
   const skillContext = skills.length > 0
     ? `\n## Review Skills Applied\n${skills.map(s => s.content).join('\n\n')}`
+    : '';
+
+  const staticAnalysisSection = staticFindings && staticFindings.length > 0
+    ? `\n## Static Analysis Findings\nThe following issues were detected by static analysis tools. Consider these as context — they may inform your review but are NOT the primary focus.\n${formatStaticFindings(staticFindings)}\n`
+    : '';
+
+  const memoryRulesSection = memoryRules && memoryRules.length > 0
+    ? `\n${formatRulesForPrompt(memoryRules)}\n`
     : '';
 
   const fileList = diff.files
@@ -35,7 +44,7 @@ ${fileList}
 
 ## Diff
 ${diffResult.content}
-${skillContext}
+${staticAnalysisSection}${memoryRulesSection}${skillContext}
 ${truncationWarning}
 
 ## Review Instructions
@@ -108,6 +117,24 @@ If you propose a fix, implement it and please make it concise.
 
 VERDICT: approve|request_changes|comment
 
+## Confidence Scoring (REQUIRED)
+For EACH comment, include a confidence score on a scale of 0.0 to 1.0 indicating how certain you are that this is a real, actionable issue.
+
+Format: Add [Confidence: X.X] at the end of each comment body, before the VERDICT line.
+
+Scoring guide:
+- 0.9-1.0: Definite bug, security vulnerability, or clear correctness issue
+- 0.7-0.9: Likely issue with clear impact, good confidence
+- 0.5-0.7: Potential issue, may be style/preference
+- 0.3-0.5: Speculative, may be false positive
+- 0.0-0.3: Low confidence, likely noise
+
+Example:
+[File: /src/auth.ts, Line: 42]
+**Suggestion:** ...comment body...
+<details>...</details>
+[Confidence: 0.85]
+
 RULES:
 - The [File:, Line:] marker must use the EXACT path from the diff (including any leading slash)
 - The line number must appear in the diff
@@ -135,4 +162,32 @@ export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { conten
   }
 
   return { content, truncated: false, truncatedCount: 0 };
+}
+
+/**
+ * Format static analysis findings for inclusion in the prompt
+ */
+function formatStaticFindings(findings: StaticFinding[]): string {
+  // Group by tool
+  const grouped: Record<string, StaticFinding[]> = {};
+  for (const finding of findings) {
+    if (!grouped[finding.tool]) {
+      grouped[finding.tool] = [];
+    }
+    grouped[finding.tool].push(finding);
+  }
+
+  let output = '';
+  for (const [tool, toolFindings] of Object.entries(grouped)) {
+    output += `\n### ${tool.toUpperCase()}\n`;
+    for (const f of toolFindings) {
+      output += `- **${f.path}:${f.line}** [${f.severity}] ${f.message}`;
+      if (f.rule) {
+        output += ` (${f.rule})`;
+      }
+      output += '\n';
+    }
+  }
+
+  return output;
 }

@@ -29,6 +29,15 @@ export {
   CHECKPOINT_USER_AGENT
 } from './review/checkpoint';
 
+// Export precision filter (P1: Precision-First Output)
+export {
+  filterByConfidence,
+  calculatePrecisionMetrics,
+  estimateConfidence,
+  type PrecisionFilterResult,
+  type PrecisionFilterConfig
+} from './review/precision-filter';
+
 export * from './types';
 
 import { VCSAdapter } from './adapters/vcs/base';
@@ -42,6 +51,9 @@ import {
   createCheckpoint,
   generateCheckpointComment
 } from './review/checkpoint';
+import { filterByConfidence, estimateConfidence } from './review/precision-filter';
+import { runStaticAnalysis } from './analysis/static-analyzer';
+import { loadRulesForFiles, MemoryRule } from './memory';
 
 /**
  * Result of an incremental review check
@@ -297,6 +309,35 @@ export class PRReviewAgent {
       files.map(f => f.path)
     );
 
+    // 3.5. Run static analysis (P1.2: Static Analysis Layer)
+    let staticFindings: import('./types').StaticFinding[] = [];
+    if (this.config.review?.staticAnalysis?.enabled !== false) {
+      try {
+        console.log('🔍 Running static analysis...');
+        staticFindings = await runStaticAnalysis(
+          process.cwd(),
+          this.config.review?.staticAnalysis || {}
+        );
+        if (staticFindings.length > 0) {
+          console.log(`📊 Static analysis found ${staticFindings.length} issues`);
+        }
+      } catch (error: any) {
+        console.warn(`Static analysis failed: ${error.message}`);
+      }
+    }
+
+    // 3.6. Load institutional memory rules (P1.3)
+    let memoryRules: MemoryRule[] = [];
+    try {
+      const loadedRules = loadRulesForFiles(files.map(f => f.path));
+      memoryRules = loadedRules.matched;
+      if (memoryRules.length > 0) {
+        console.log(`Memory: ${memoryRules.length}/${loadedRules.total} rules apply to this PR`);
+      }
+    } catch (error: any) {
+      console.warn(`Failed to load memory rules: ${error.message}`);
+    }
+
     // 4. Build context
     const context: ReviewContext = {
       pr,
@@ -304,11 +345,41 @@ export class PRReviewAgent {
       files,
       tickets,
       skills: applicableSkills,
+      staticFindings: staticFindings.length > 0 ? staticFindings : undefined,
+      memoryRules: memoryRules.length > 0 ? memoryRules : undefined,
       config: this.config.review
     };
 
     // 5. Run review
-    const result = await this.llm.generateReview(context);
+    let result = await this.llm.generateReview(context);
+
+    // P1: Precision-First Output - filter by confidence threshold
+    const precisionThreshold = this.config.review?.precisionThreshold ?? 0.7;
+    const filterResult = filterByConfidence(result.comments, { threshold: precisionThreshold });
+
+    // Estimate confidence for comments without explicit scores
+    const commentsWithEstimatedConfidence = filterResult.passed.map(c => ({
+      ...c,
+      confidence: c.confidence ?? estimateConfidence(c)
+    }));
+
+    if (filterResult.emptyMessage) {
+      console.log(`🎯 Precision filter: 0/${result.comments.length} comments passed threshold (${precisionThreshold})`);
+      return {
+        summary: filterResult.emptyMessage,
+        comments: [],
+        suggestions: [],
+        verdict: 'comment'
+      };
+    }
+
+    console.log(`🎯 Precision filter: ${filterResult.passed.length}/${result.comments.length} comments passed threshold (${precisionThreshold})`);
+
+    // Apply precision filter to result
+    result = {
+      ...result,
+      comments: commentsWithEstimatedConfidence
+    };
 
     // Cache diff for use in postReview path validation
     this.lastDiff = diff;
