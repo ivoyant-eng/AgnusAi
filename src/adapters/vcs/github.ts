@@ -689,7 +689,7 @@ export class GitHubAdapter implements VCSAdapter {
 
   /**
    * Get incremental diff for a PR since a checkpoint
-   * 
+   *
    * @param prId PR number
    * @param checkpointSha The SHA from the last checkpoint
    * @returns Incremental diff or null if full review needed
@@ -700,8 +700,11 @@ export class GitHubAdapter implements VCSAdapter {
   ): Promise<{ diff: Diff; isIncremental: true } | { diff: null; isIncremental: false; reason: string }> {
     const headSha = await this.getHeadSha(prId);
 
+    console.log(`📊 Comparing commits: checkpoint=${checkpointSha.substring(0, 7)} HEAD=${headSha.substring(0, 7)}`);
+
     // If no new commits, no diff needed
     if (headSha === checkpointSha) {
+      console.log('✓ No new commits since checkpoint');
       return {
         diff: { files: [], additions: 0, deletions: 0, changedFiles: 0 },
         isIncremental: true
@@ -710,7 +713,10 @@ export class GitHubAdapter implements VCSAdapter {
 
     try {
       const comparison = await this.compareCommits(checkpointSha, headSha);
-      
+
+      console.log(`📊 Comparison status: ${comparison.status}, ahead_by=${comparison.aheadBy}, files=${comparison.files.length}`);
+      console.log(`📁 Changed files from comparison: ${comparison.files.map(f => f.path).join(', ')}`);
+
       // If diverged or behind, we need a full review
       if (comparison.status === 'diverged') {
         return {
@@ -730,6 +736,7 @@ export class GitHubAdapter implements VCSAdapter {
 
       // If identical, no changes
       if (comparison.status === 'identical') {
+        console.log('✓ Commits are identical, no changes');
         return {
           diff: { files: [], additions: 0, deletions: 0, changedFiles: 0 },
           isIncremental: true
@@ -737,7 +744,8 @@ export class GitHubAdapter implements VCSAdapter {
       }
 
       // Ahead - we have incremental changes
-      // Get full diff content for the changed files
+      // Fetch full diff content to get hunks for proper review
+      console.log(`📁 Fetching diff content for ${comparison.files.length} files...`);
       const diffResponse = await this.octokit.request(
         'GET /repos/{owner}/{repo}/compare/{basehead}',
         {
@@ -749,9 +757,10 @@ export class GitHubAdapter implements VCSAdapter {
       );
 
       const diffText = String(diffResponse.data);
-      
-      // Parse the diff
+
+      // Parse the diff to get hunks - use comparison files for metadata
       const files = this.parseDiff(diffText, comparison.files);
+      console.log(`📁 Parsed ${files.length} files with hunks from diff`);
 
       return {
         diff: {

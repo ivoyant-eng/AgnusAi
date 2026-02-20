@@ -57,6 +57,14 @@ export interface IncrementalCheckResult {
   checkpointCommentId?: number;
 }
 
+/**
+ * Extended review result that tracks all files reviewed (not just files with comments)
+ */
+export interface ExtendedReviewResult extends ReviewResult {
+  /** All files that were in the diff and reviewed */
+  filesReviewed?: string[];
+}
+
 export class PRReviewAgent {
   private vcs: VCSAdapter;
   private tickets: TicketAdapter[];
@@ -137,6 +145,7 @@ export class PRReviewAgent {
     const checkpoint = checkResult.checkpoint;
 
     console.log(`🔄 Incremental review from checkpoint: ${checkpoint.sha.substring(0, 7)}`);
+    console.log(`📁 Previously reviewed files (${checkpoint.filesReviewed.length}): ${checkpoint.filesReviewed.join(', ')}`);
 
     // Get incremental diff
     const incrementalResult = await github.getIncrementalDiff(prId, checkpoint.sha);
@@ -148,12 +157,18 @@ export class PRReviewAgent {
 
     // If no changes, return empty result
     if (incrementalResult.diff.files.length === 0) {
+      console.log('📋 No new changes since last checkpoint');
       return {
         summary: 'No new changes since last review checkpoint.',
         comments: [],
         suggestions: [],
         verdict: 'comment'
       };
+    }
+
+    console.log(`📁 Incremental review: ${incrementalResult.diff.files.length} changed files:`);
+    for (const file of incrementalResult.diff.files) {
+      console.log(`   - ${file.path} (${file.status}, +${file.additions}/-${file.deletions})`);
     }
 
     // Fetch PR data
@@ -199,6 +214,10 @@ export class PRReviewAgent {
     // Add checkpoint marker to summary
     result.summary = `[Incremental Review: ${incrementalResult.diff.files.length} new files]\n\n${result.summary}`;
 
+    // Track all files that were reviewed (not just files with comments)
+    const filesInDiff = incrementalResult.diff.files.map(f => f.path);
+    (result as ExtendedReviewResult).filesReviewed = filesInDiff;
+
     // Cache diff
     this.lastDiff = incrementalResult.diff;
 
@@ -224,10 +243,15 @@ export class PRReviewAgent {
     const github = this.vcs as GitHubAdapter;
     const headSha = await github.getHeadSha(prId);
 
+    // Get files reviewed - use extended result if available, otherwise fall back to comment files
+    const extendedResult = result as ExtendedReviewResult;
+    const currentReviewedFiles = extendedResult.filesReviewed || result.comments.map(c => c.path);
+
     // Merge files: start with previously reviewed files, add current ones, deduplicate
     const previousFiles = previousCheckpoint?.filesReviewed || [];
-    const currentFiles = result.comments.map(c => c.path);
-    const allFilesReviewed = [...new Set([...previousFiles, ...currentFiles])];
+    const allFilesReviewed = [...new Set([...previousFiles, ...currentReviewedFiles])];
+
+    console.log(`📁 Checkpoint files: ${previousFiles.length} previous + ${currentReviewedFiles.length} current = ${allFilesReviewed.length} total`);
 
     const checkpoint = createCheckpoint(
       headSha,
@@ -340,10 +364,26 @@ export class PRReviewAgent {
     const comments = await github.getPRComments(prId);
     const found = findCheckpointComment(comments);
 
+    // Get files reviewed - use extended result if available, otherwise use diff files or fall back to comment files
+    const extendedResult = result as ExtendedReviewResult;
+    let currentReviewedFiles: string[];
+
+    if (extendedResult.filesReviewed) {
+      // Already has files tracked (from incremental review)
+      currentReviewedFiles = extendedResult.filesReviewed;
+    } else if (this.lastDiff) {
+      // For full reviews, use all files in the diff
+      currentReviewedFiles = this.lastDiff.files.map(f => f.path);
+    } else {
+      // Fallback to files with comments
+      currentReviewedFiles = result.comments.map(c => c.path);
+    }
+
     // Merge filesReviewed if there was a previous checkpoint
     const previousFiles = found?.checkpoint.filesReviewed || [];
-    const currentFiles = result.comments.map(c => c.path);
-    const allFilesReviewed = [...new Set([...previousFiles, ...currentFiles])];
+    const allFilesReviewed = [...new Set([...previousFiles, ...currentReviewedFiles])];
+
+    console.log(`📁 Checkpoint files: ${previousFiles.length} previous + ${currentReviewedFiles.length} current = ${allFilesReviewed.length} total`);
 
     const checkpoint = createCheckpoint(
       headSha,
@@ -356,12 +396,12 @@ export class PRReviewAgent {
       // Update existing checkpoint
       console.log('📝 Updating existing checkpoint comment...');
       await github.updateCheckpointComment(found.comment.id, checkpoint);
-      
+
       // Delete any other duplicate checkpoint comments
-      const allCheckpointComments = comments.filter(c => 
+      const allCheckpointComments = comments.filter(c =>
         c.body.includes('AGNUSAI_CHECKPOINT') && c.id !== found.comment.id
       );
-      
+
       for (const duplicate of allCheckpointComments) {
         console.log(`🗑️  Deleting duplicate checkpoint comment ${duplicate.id}`);
         try {
