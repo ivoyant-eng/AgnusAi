@@ -114,6 +114,13 @@ npm test
 
 ## Stress Testing Incremental Reviews
 
+### Test Repositories
+
+| Platform | Repo | Purpose |
+|----------|------|---------|
+| **GitHub** | `theashishmaurya/pr-review-test` | Stress testing incremental reviews, deduplication |
+| **Azure DevOps** | `AshishM0615/GitTestAzure/AgnusStressTestAzure` | Stress testing Azure adapter, line positioning |
+
 ### What It Tests
 When a PR has existing AgnusAI comments and new commits are pushed, the agent should:
 1. Detect previously reviewed files via checkpoint
@@ -125,31 +132,28 @@ When a PR has existing AgnusAI comments and new commits are pushed, the agent sh
 ```bash
 cd /root/.openclaw/workspace/projects/pr-review-agent
 
-# Run incremental review stress test (5 rounds)
-# This simulates multiple commits and verifies incremental behavior
-node dist/cli.js test:incremental --pr 5 --rounds 5
+# GitHub (test repo)
+GITHUB_TOKEN=$(gh auth token) node dist/cli.js review \
+  --pr 5 --repo theashishmaurya/pr-review-test --dry-run
+
+# Azure DevOps (test repo)
+node dist/cli.js review \
+  --pr 6 --repo GitTestAzure/AgnusStressTestAzure --vcs azure --dry-run
 ```
 
 ### Stress Test Results (2026-02-20)
 
-#### GitHub PR #5 (Incremental Reviews)
-- **Test:** Incremental reviews on PR #5
-- **Rounds:** 5/5 passed ✅
-- **Runtime:** 14 minutes
-- **Issues Found:** None
+#### GitHub PR #5 (theashishmaurya/pr-review-test)
+- **Test:** Full review + incremental
+- **Rounds:** 2/2 passed ✅
+- **Issues Found:** Debug logging hardcoded, memory leak in logger, SQL injection, hardcoded credentials
+- **Incremental:** Checkpoint detection working ✅
 
-#### Azure DevOps PR #5 (Full Reviews)
-- **Repo:** `AshishM0615/GitTestAzure/AgnusStressTestAzure`
-- **Test:** Multi-round reviews with intentional security issues
-- **Rounds:** 3 reviews posted ✅
-- **Issues Found:** 18 total (security vulnerabilities, logic errors, test coverage gaps)
-- **Key findings:**
-  - Prototype pollution vulnerability in checkpoint parsing
-  - Unicode homoglyph bypass in dismissal detection
-  - Checkpoint validation logic too permissive
-  - Missing error handling for malformed JSON
-  - Mixed package manager lock files
-- **PR URL:** https://dev.azure.com/AshishM0615/GitTestAzure/_git/AgnusStressTestAzure/pullrequest/5
+#### Azure DevOps PR #6 (GitTestAzure/AgnusStressTestAzure)
+- **Test:** Full review
+- **Rounds:** 1 passed ✅
+- **Issues Found:** Critical security vulnerabilities (input validation, token generation)
+- **Line positioning:** Correct ✅
 
 ---
 
