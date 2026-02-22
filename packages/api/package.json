@@ -1,0 +1,26 @@
+{
+  "name": "@agnus-ai/api",
+  "version": "0.1.0",
+  "description": "Fastify API server for AgnusAI — webhooks, SSE indexing progress, review orchestration",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "@agnus-ai/core": "workspace:*",
+    "@agnus-ai/reviewer": "workspace:*",
+    "@agnus-ai/shared": "workspace:*",
+    "@fastify/sensible": "^5.6.0",
+    "@fastify/static": "^7.0.4",
+    "fastify": "^4.28.0",
+    "pg": "^8.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/pg": "^8.11.0",
+    "typescript": "^5.3.0"
+  },
+  "license": "MIT"
+}
