@@ -29,6 +29,7 @@ This builds packages in dependency order:
 | `@agnus-ai/core` | `packages/core/dist/` |
 | `@agnus-ai/reviewer` | `packages/reviewer/dist/` |
 | `@agnus-ai/api` | `packages/api/dist/` |
+| `@agnus-ai/dashboard` | `packages/dashboard/dist/` |
 | `@agnus-ai/docs` | `packages/docs/.vitepress/dist/` |
 
 ## Build a Single Package
@@ -64,12 +65,24 @@ docker compose up -d postgres ollama
 
 # Copy and fill in environment
 cp .env.example .env
+# Edit .env — at minimum set:
+#   ADMIN_EMAIL, ADMIN_PASSWORD, JWT_SECRET, DATABASE_URL
+
+# Build all packages first
+pnpm --filter @agnus-ai/shared build
+pnpm --filter @agnus-ai/core build
+pnpm --filter @agnus-ai/reviewer build
+pnpm --filter @agnus-ai/api build
 
 # Start the API
-pnpm --filter @agnus-ai/api start
+node packages/api/dist/index.js
 ```
 
 The server starts on `http://localhost:3000`.
+
+### First Login
+
+On startup, if the `users` table is empty and `ADMIN_EMAIL` + `ADMIN_PASSWORD` are set, an admin account is bootstrapped automatically. Open `http://localhost:3000/app/` and sign in with those credentials.
 
 ## Watch Mode (auto-rebuild on file change)
 
@@ -98,6 +111,9 @@ Quick reference for development:
 
 | Variable | Purpose |
 |----------|---------|
+| `ADMIN_EMAIL` | Admin account email (bootstrapped on first run) |
+| `ADMIN_PASSWORD` | Admin account password |
+| `JWT_SECRET` | Secret for signing session JWTs |
 | `GITHUB_TOKEN` | GitHub PAT for posting review comments |
 | `AZURE_DEVOPS_TOKEN` | Azure DevOps PAT |
 | `ANTHROPIC_API_KEY` | Claude provider |

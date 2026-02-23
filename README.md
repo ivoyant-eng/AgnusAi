@@ -74,9 +74,13 @@ cp .env.example .env
 Edit `.env`:
 
 ```env
-# Required
+# Auth — admin bootstrapped on first run
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=changeme
+JWT_SECRET=change-me-in-production
+
+# Webhooks
 WEBHOOK_SECRET=your-secret-here
-SESSION_SECRET=your-session-secret
 
 # LLM — defaults to local Ollama
 LLM_PROVIDER=ollama
@@ -84,7 +88,7 @@ LLM_MODEL=qwen2.5-coder
 
 # Embeddings — for deep review mode (optional)
 EMBEDDING_PROVIDER=ollama
-EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_MODEL=qwen3-embedding:0.6b
 
 # Review depth: fast | standard | deep
 REVIEW_DEPTH=standard
@@ -105,31 +109,47 @@ This starts:
 
 ```bash
 docker compose exec ollama ollama pull qwen2.5-coder
-docker compose exec ollama ollama pull nomic-embed-text   # only if EMBEDDING_PROVIDER=ollama
+docker compose exec ollama ollama pull qwen3-embedding:0.6b   # only if EMBEDDING_PROVIDER=ollama
 ```
 
-### 4. Register a repository
+### 4. Log in to the dashboard
+
+Open `http://localhost:3000/app/` and sign in with the `ADMIN_EMAIL` / `ADMIN_PASSWORD` from your `.env`.
+
+### 5. Register a repository
+
+**Via the dashboard:** click **Connect Repo**, enter the URL, token, and branches, then submit.
+
+**Via the API:**
 
 ```bash
-curl -X POST http://localhost:3000/api/repos \
+# Save session cookie
+curl -c /tmp/agnus.txt -X POST http://localhost:3000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@example.com","password":"changeme"}'
+
+# Register repo
+curl -b /tmp/agnus.txt -X POST http://localhost:3000/api/repos \
   -H "Content-Type: application/json" \
   -d '{
     "repoUrl": "https://github.com/owner/repo",
     "platform": "github",
     "token": "ghp_...",
-    "repoPath": "/path/to/local/clone"
+    "repoPath": "/path/to/local/clone",
+    "branches": ["main", "develop"]
   }'
 ```
 
 Response:
 ```json
-{"repoId": "aHR0cHM6...", "message": "Indexing started — stream progress at /api/repos/.../index/status"}
+{"repoId": "aHR0cHM6...", "branches": ["main", "develop"], "message": "Indexing started for 2 branch(es)..."}
 ```
 
-### 5. Watch indexing progress
+### 6. Watch indexing progress
 
 ```bash
-curl -N http://localhost:3000/api/repos/<repoId>/index/status
+curl -N -b /tmp/agnus.txt \
+  "http://localhost:3000/api/repos/<repoId>/index/status?branch=main"
 ```
 
 ```
@@ -138,20 +158,22 @@ data: {"step":"embedding","symbolCount":235,"progress":32,"total":235}
 data: {"step":"done","symbolCount":235,"edgeCount":1194,"durationMs":4200}
 ```
 
-### 6. Configure GitHub webhooks
+### 7. Configure GitHub webhooks
 
 In your GitHub repo: **Settings → Webhooks → Add webhook**
 
 - **Payload URL:** `https://your-server:3000/api/webhooks/github`
 - **Content type:** `application/json`
 - **Secret:** value of `WEBHOOK_SECRET`
-- **Events:** `Pull requests`, `Pull request review comments`
+- **Events:** `Push`, `Pull requests`
 
 From now on, every PR open/sync triggers a graph-aware review automatically.
 
-### 7. Open the dashboard
+### 8. Dashboard, docs, and team management
 
-`http://localhost:3000/app/` — connect repos, watch indexing, view review history.
+- **Dashboard:** `http://localhost:3000/app/` — repos, indexing progress, review history, settings
+- **Docs:** `http://localhost:3000/docs/`
+- **Invite team members:** Settings → Generate Invite Link (admin only)
 
 ---
 
@@ -333,18 +355,27 @@ steps:
 
 ## API Routes
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | Landing page |
-| `GET` | `/api/health` | Health check |
-| `POST` | `/api/repos` | Register repo + trigger full index |
-| `GET` | `/api/repos/:id/index/status` | SSE indexing progress stream |
-| `GET` | `/api/repos/:id/graph/blast-radius/:symbolId` | Blast radius for a symbol |
-| `DELETE` | `/api/repos/:id` | Deregister repo |
-| `POST` | `/api/webhooks/github` | GitHub webhook receiver |
-| `POST` | `/api/webhooks/azure` | Azure DevOps webhook receiver |
-| `GET` | `/app/*` | Dashboard (Vite React SPA) |
-| `GET` | `/docs/*` | Documentation (VitePress) |
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/` | — | Landing page |
+| `GET` | `/api/health` | — | Health check |
+| `POST` | `/api/auth/login` | — | Email + password → session cookie |
+| `POST` | `/api/auth/logout` | — | Clear session cookie |
+| `GET` | `/api/auth/me` | ✓ | Current user identity |
+| `POST` | `/api/auth/invite` | admin | Generate one-time invite link |
+| `POST` | `/api/auth/register` | — | Register via invite token |
+| `GET` | `/api/repos` | ✓ | List registered repos |
+| `POST` | `/api/repos` | ✓ | Register repo + trigger full index |
+| `GET` | `/api/repos/:id/index/status` | — | SSE indexing progress stream |
+| `GET` | `/api/repos/:id/graph/blast-radius/:symbolId` | — | Blast radius for a symbol |
+| `DELETE` | `/api/repos/:id` | ✓ | Deregister repo |
+| `GET` | `/api/reviews` | ✓ | Last 50 reviews |
+| `GET` | `/api/settings` | ✓ | Review depth preference |
+| `POST` | `/api/settings` | ✓ | Update review depth preference |
+| `POST` | `/api/webhooks/github` | HMAC | GitHub webhook receiver |
+| `POST` | `/api/webhooks/azure` | HMAC | Azure DevOps webhook receiver |
+| `GET` | `/app/*` | — | Dashboard (Vite React SPA) |
+| `GET` | `/docs/*` | — | Documentation (VitePress) |
 
 ---
 

@@ -9,8 +9,9 @@ packages/
 ├── shared/     — shared TypeScript types (ParsedSymbol, Edge, BlastRadius, …)
 ├── core/       — Tree-sitter parsers, InMemorySymbolGraph, Indexer, Retriever, Embeddings
 ├── reviewer/   — CLI reviewer (Layer 0 — unchanged from v1)
-├── api/        — Fastify server (webhooks, REST, SSE)
-└── docs/       — VitePress documentation (this site)
+├── api/        — Fastify server (webhooks, REST, SSE, auth, landing page)
+├── dashboard/  — Vite React SPA — served at /app/ (login, repos, reviews, settings)
+└── docs/       — VitePress documentation (this site) — served at /docs/
 ```
 
 ## Data Flow

@@ -2,13 +2,20 @@
 
 All configuration is through environment variables. Copy `.env.example` to `.env` to get started.
 
-## Required
+## Authentication
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ADMIN_EMAIL` | `admin@example.com` | Email of the root admin user. Bootstrapped automatically on first start if the users table is empty. |
+| `ADMIN_PASSWORD` | `changeme` | Password for the root admin. **Change this in production.** |
+| `JWT_SECRET` | — | Secret used to sign session JWTs. Use a long random string in production. |
+| `SESSION_SECRET` | — | Legacy session secret (fallback if `JWT_SECRET` is unset). |
+
+## Webhooks
 
 | Variable | Description |
 |----------|-------------|
 | `WEBHOOK_SECRET` | Secret used to verify GitHub webhook signatures (`X-Hub-Signature-256`). Any strong random string. |
-| `SESSION_SECRET` | Secret for session encryption. Any strong random string. |
-| `GITHUB_TOKEN` | GitHub personal access token with `repo` scope for reading PRs and posting comments. |
 
 ## Database
 
@@ -29,7 +36,7 @@ All configuration is through environment variables. Copy `.env.example` to `.env
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EMBEDDING_PROVIDER` | — | `ollama` \| `openai` \| `google` \| `http`. If unset, embeddings are disabled (standard mode only). |
+| `EMBEDDING_PROVIDER` | — | `ollama` \| `openai` \| `google` \| `http`. If unset, embeddings are disabled (standard/fast mode only). |
 | `EMBEDDING_MODEL` | `qwen3-embedding:0.6b` | Embedding model name. |
 | `EMBEDDING_BASE_URL` | `http://localhost:11434` | Base URL for Ollama or HTTP provider. |
 | `EMBEDDING_API_KEY` | — | Required for `openai`, `google`, `http` providers. |
@@ -46,18 +53,25 @@ All configuration is through environment variables. Copy `.env.example` to `.env
 |----------|---------|-------------|
 | `PORT` | `3000` | HTTP port the API server listens on. |
 | `HOST` | `0.0.0.0` | Bind address. |
-| `DASHBOARD_DIST` | `packages/dashboard/dist` | Path to built dashboard static files. |
+| `DASHBOARD_DIST` | auto-resolved | Path to built dashboard static files. Set automatically in Docker. |
+| `DOCS_DIST` | auto-resolved | Path to built VitePress docs. Set automatically in Docker. |
 
-## Azure DevOps (optional)
+## VCS Tokens
 
 | Variable | Description |
 |----------|-------------|
+| `GITHUB_TOKEN` | GitHub personal access token with `repo` scope for reading PRs and posting comments. |
 | `AZURE_DEVOPS_TOKEN` | PAT with Code Read + Pull Request Contribute permissions. |
 
 ## Full Example
 
-```bash
-# Required
+```env
+# Auth — root admin bootstrapped on first run
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=changeme
+JWT_SECRET=change-me-in-production
+
+# Webhooks
 WEBHOOK_SECRET=my-secret-key
 SESSION_SECRET=my-session-secret
 
@@ -69,7 +83,7 @@ LLM_PROVIDER=ollama
 LLM_BASE_URL=http://localhost:11434/v1
 LLM_MODEL=qwen2.5-coder
 
-# Embeddings — Ollama (local, default)
+# Embeddings — Ollama (local, optional — needed only for deep mode)
 EMBEDDING_PROVIDER=ollama
 EMBEDDING_BASE_URL=http://localhost:11434
 EMBEDDING_MODEL=qwen3-embedding:0.6b
