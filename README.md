@@ -290,11 +290,82 @@ Used only in `REVIEW_DEPTH=deep` mode:
 
 ---
 
-## CI/CD Integration (CLI Mode)
+## CI/CD Integration
 
-### GitHub Actions
+If you are running the **hosted service** (v2), your CI pipeline needs to do nothing — webhooks handle reviews automatically the moment a PR is opened or updated. Set up the webhook once (step 7 of the quickstart) and you're done.
 
-Add `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`) as a repository secret, then:
+Use the pipeline snippets below only if you want to **explicitly trigger a review from a pipeline step**, or if you are using the **CLI mode** without a server.
+
+---
+
+### Option A — Trigger your hosted AgnusAI server (recommended)
+
+Your server already has the repo indexed. The pipeline just sends the PR number — no cloning, no LLM keys, no build step.
+
+Add these as repository/pipeline secrets:
+
+| Secret | Value |
+|--------|-------|
+| `AGNUS_URL` | Your server URL, e.g. `https://agnus.company.com` |
+| `AGNUS_API_KEY` | The `API_KEY` value from your server's `.env` |
+| `AGNUS_REPO_ID` | The repo ID from the dashboard URL (`/app/ready/<repoId>`) |
+
+**GitHub Actions:**
+
+```yaml
+name: AI PR Review
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger AgnusAI Review
+        run: |
+          curl -f -X POST "${{ secrets.AGNUS_URL }}/api/repos/${{ secrets.AGNUS_REPO_ID }}/review" \
+            -H "Authorization: Bearer ${{ secrets.AGNUS_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "prNumber": ${{ github.event.pull_request.number }},
+              "baseBranch": "${{ github.event.pull_request.base.ref }}"
+            }'
+```
+
+**Azure Pipelines:**
+
+```yaml
+trigger: none
+pr:
+  branches:
+    include: ['*']
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - script: |
+      curl -f -X POST "$(AGNUS_URL)/api/repos/$(AGNUS_REPO_ID)/review" \
+        -H "Authorization: Bearer $(AGNUS_API_KEY)" \
+        -H "Content-Type: application/json" \
+        -d "{\"prNumber\": $(System.PullRequest.PullRequestId), \"baseBranch\": \"$(System.PullRequest.TargetBranch)\"}"
+    displayName: Trigger AgnusAI Review
+    env:
+      AGNUS_URL: $(AGNUS_URL)
+      AGNUS_REPO_ID: $(AGNUS_REPO_ID)
+      AGNUS_API_KEY: $(AGNUS_API_KEY)
+```
+
+> Set `API_KEY` in your server's `.env` to enable this. The `AGNUS_REPO_ID` is shown in the dashboard URL when you view a repo's setup page.
+
+---
+
+### Option B — Standalone CLI (no server)
+
+Use this only if you are **not** running the hosted service. Install the published npm package — no cloning, no building.
+
+**GitHub Actions:**
 
 ```yaml
 name: AI PR Review
@@ -309,82 +380,37 @@ jobs:
       pull-requests: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: _agnus/pnpm-lock.yaml
-
-      - name: Install AgnusAI
-        run: |
-          git clone --depth=1 https://github.com/ivoyant-eng/AgnusAi.git _agnus
-          cd _agnus && pnpm install --frozen-lockfile
-          pnpm --filter @agnus-ai/reviewer build
 
       - name: Run Review
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          node _agnus/packages/reviewer/dist/cli.js review \
+          npx @agnus-ai/reviewer review \
             --pr ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
             --provider claude
 ```
 
-**Using Ollama instead** (self-hosted runner with Ollama installed):
+**Azure Pipelines:**
 
-```yaml
-      - name: Run Review
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OLLAMA_BASE_URL: http://localhost:11434/v1
-        run: |
-          node _agnus/packages/reviewer/dist/cli.js review \
-            --pr ${{ github.event.pull_request.number }} \
-            --repo ${{ github.repository }} \
-            --provider ollama \
-            --model qwen2.5-coder
-```
-
----
-
-### Azure Pipelines
-
-Set these pipeline variables (mark as secret where noted):
-
-| Variable | Value | Secret |
-|----------|-------|--------|
-| `AZURE_DEVOPS_ORG` | your org name (e.g. `ivoyant`) | No |
-| `AZURE_DEVOPS_PROJECT` | your project name (e.g. `PlatformNX`) | No |
-| `ANTHROPIC_API_KEY` | your Anthropic key | Yes |
+Set pipeline variables: `AZURE_DEVOPS_ORG` (e.g. `ivoyant`), `AZURE_DEVOPS_PROJECT` (e.g. `PlatformNX`), `ANTHROPIC_API_KEY` (secret).
 
 ```yaml
 trigger: none
 pr:
   branches:
-    include:
-      - '*'
+    include: ['*']
 
 pool:
   vmImage: 'ubuntu-latest'
 
 steps:
   - script: |
-      npm install -g pnpm@9
-      git clone --depth=1 https://github.com/ivoyant-eng/AgnusAi.git _agnus
-      cd _agnus && pnpm install --frozen-lockfile
-      pnpm --filter @agnus-ai/reviewer build
-    displayName: Install AgnusAI
-
-  - script: |
-      node _agnus/packages/reviewer/dist/cli.js review \
+      npx @agnus-ai/reviewer review \
         --pr $(System.PullRequest.PullRequestId) \
         --repo $(AZURE_DEVOPS_PROJECT)/$(Build.Repository.Name) \
         --vcs azure \
@@ -397,7 +423,7 @@ steps:
       ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
 ```
 
-> `System.AccessToken` is the built-in pipeline token. Grant it **Contribute to pull requests** permission in Project Settings → Repositories → Security.
+> `System.AccessToken` needs **Contribute to pull requests** permission: Project Settings → Repositories → Security.
 
 ---
 
@@ -412,6 +438,8 @@ steps:
 | `GET` | `/api/auth/me` | ✓ | Current user identity |
 | `POST` | `/api/auth/invite` | admin | Generate one-time invite link |
 | `POST` | `/api/auth/register` | — | Register via invite token |
+| `GET` | `/api/auth/api-key` | admin | Get masked preview of current API key |
+| `POST` | `/api/auth/api-key` | admin | Generate (or regenerate) API key |
 | `GET` | `/api/repos` | ✓ | List registered repos |
 | `POST` | `/api/repos` | ✓ | Register repo + trigger full index |
 | `GET` | `/api/repos/:id/index/status` | — | SSE indexing progress stream |
