@@ -77,7 +77,7 @@ export class Indexer {
     // Embed all symbols if an embedding adapter is configured
     if (this.embeddings) {
       const allSymbols = this.graph.getAllSymbols().filter(s => s.repoId === repoId)
-      await this.embedBatch(allSymbols, repoId, (done) => {
+      await this.embedBatch(allSymbols, repoId, branch, (done) => {
         onProgress?.({ step: 'embedding', symbolCount: allSymbols.length, progress: done, total: allSymbols.length })
       })
     }
@@ -117,7 +117,7 @@ export class Indexer {
         await this.storage.saveEdges(edgesWithRepo, branch)
 
         if (this.embeddings && result.symbols.length > 0) {
-          await this.embedBatch(result.symbols, repoId)
+          await this.embedBatch(result.symbols, repoId, branch)
         }
       } catch (err) {
         console.warn(`[Indexer] Incremental update failed for ${relPath}: ${(err as Error).message}`)
@@ -134,6 +134,7 @@ export class Indexer {
   private async embedBatch(
     symbols: import('@agnus-ai/shared').ParsedSymbol[],
     repoId: string,
+    branch: string,
     onProgress?: (done: number) => void,
   ): Promise<void> {
     if (!this.embeddings) return
@@ -145,7 +146,7 @@ export class Indexer {
       try {
         const vectors = await this.embeddings.embed(texts)
         for (let j = 0; j < batch.length; j++) {
-          await this.embeddings.upsert(batch[j].id, repoId, vectors[j])
+          await this.embeddings.upsert(batch[j].id, repoId, branch, vectors[j])
         }
       } catch (err) {
         console.warn(`[Indexer] Embedding batch failed (i=${i}): ${(err as Error).message}`)

@@ -54,12 +54,12 @@ export class GoogleEmbeddingAdapter implements EmbeddingAdapter {
     return results
   }
 
-  async upsert(symbolId: string, repoId: string, vector: number[]): Promise<void> {
+  async upsert(symbolId: string, repoId: string, branch: string, vector: number[]): Promise<void> {
     await this.db.query(
-      `INSERT INTO symbol_embeddings (symbol_id, repo_id, embedding)
-       VALUES ($1, $2, $3::vector)
-       ON CONFLICT (symbol_id, repo_id) DO UPDATE SET embedding = EXCLUDED.embedding`,
-      [symbolId, repoId, `[${vector.join(',')}]`],
+      `INSERT INTO symbol_embeddings (symbol_id, repo_id, branch, embedding)
+       VALUES ($1, $2, $3, $4::vector)
+       ON CONFLICT (symbol_id, repo_id, branch) DO UPDATE SET embedding = EXCLUDED.embedding`,
+      [symbolId, repoId, branch, `[${vector.join(',')}]`],
     )
   }
 
