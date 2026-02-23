@@ -1,18 +1,8 @@
 {
-  "name": "pr-review-agent",
+  "name": "agnus-ai-monorepo",
   "version": "0.1.0",
-  "description": "AI-powered PR review agent with skills-based review system",
-  "main": "dist/index.js",
-  "bin": {
-    "pr-review": "./dist/cli.js"
-  },
-  "scripts": {
-    "build": "tsc",
-    "start": "node dist/cli.js",
-    "dev": "ts-node src/cli.ts",
-    "test": "jest",
-    "lint": "eslint src/**/*.ts"
-  },
+  "private": true,
+  "description": "AgnusAI — open-source, self-hostable AI code reviewer",
   "keywords": [
     "pr-review",
     "code-review",
@@ -23,24 +13,16 @@
   ],
   "author": "Ashish Maurya",
   "license": "MIT",
-  "dependencies": {
-    "@ai-sdk/openai-compatible": "^2.0.30",
-    "@octokit/rest": "^20.0.2",
-    "ai": "^6.0.91",
-    "commander": "^11.1.0",
-    "js-yaml": "^4.1.0",
-    "node-fetch": "^2.7.0"
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "lint": "pnpm -r lint"
   },
   "devDependencies": {
-    "@types/jest": "^30.0.0",
-    "@types/js-yaml": "^4.0.9",
-    "@types/node": "^20.10.0",
-    "@types/node-fetch": "^2.6.9",
-    "jest": "^30.2.0",
-    "ts-jest": "^29.4.6",
     "typescript": "^5.3.0"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
   }
 }

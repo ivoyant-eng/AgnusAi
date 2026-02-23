@@ -1,0 +1,44 @@
+# Version control
+.git
+.gitignore
+
+# Node
+node_modules
+**/node_modules
+
+# Build outputs (rebuilt inside Docker)
+**/dist
+**/*.tsbuildinfo
+
+# Test files
+**/__tests__
+**/*.test.ts
+**/*.spec.ts
+**/jest.config.*
+**/coverage
+
+# Dev tooling
+.eslintrc*
+.prettierrc*
+*.md
+!README.md
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode
+.idea
+*.swp
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.dockerignore
+

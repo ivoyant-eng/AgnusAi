@@ -1,0 +1,50 @@
+services:
+  agnus:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://agnus:agnus@postgres:5432/agnus
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      SESSION_SECRET: ${SESSION_SECRET}
+      API_KEY: ${API_KEY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-qwen3.5:397b-cloud}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      REVIEW_DEPTH: ${REVIEW_DEPTH:-standard}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    volumes:
+      - /tmp:/tmp:ro
+      - repos-data:/repos
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: agnus
+      POSTGRES_PASSWORD: agnus
+      POSTGRES_DB: agnus
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agnus"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  repos-data:

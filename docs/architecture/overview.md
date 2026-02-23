@@ -154,6 +154,29 @@ AgnusAi/
 └── package.json
 ```
 
+## v2 Target: Monorepo Structure
+
+The current `src/` is **Layer 0** — the existing CLI reviewer that does not change. The v2 roadmap wraps new layers around it. See [roadmap/v2.md](../roadmap/v2.md) for the full build order.
+
+```
+packages/
+├── core/src/
+│   ├── parser/     # Tree-sitter wrappers (TypeScript → Python → Go)
+│   ├── graph/      # InMemorySymbolGraph — adjacency list + BFS traversal
+│   ├── embeddings/ # Symbol embeddings + vector search
+│   ├── indexer/    # Full + incremental indexing (never re-index whole repo)
+│   ├── retriever/  # Graph-augmented RAG — blast radius context assembler
+│   ├── reviewer/   # ← current src/ lives here, unchanged
+│   └── storage/    # StorageAdapter: SQLite (default) | Postgres+pgvector
+├── api/            # Fastify API server, SSE indexing progress, webhooks
+├── dashboard/      # Next.js frontend, GitHub + Azure AD OAuth
+└── shared/         # ParsedSymbol, Edge, BlastRadius, ReviewContext types
+```
+
+**The only modification to the existing reviewer:** a `context` parameter added to the prompt, populated by the graph retriever before the LLM is called.
+
+---
+
 ## Technology Stack
 
 | Component | Technology |

@@ -1,0 +1,77 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* TinyFish-inspired: off-white bg, near-black text, orange accent */
+    --background: 48 5% 92%;       /* #EBEBEA */
+    --foreground: 0 0% 7%;         /* #111111 */
+
+    --card: 48 5% 95%;
+    --card-foreground: 0 0% 7%;
+
+    --popover: 48 5% 95%;
+    --popover-foreground: 0 0% 7%;
+
+    /* Orange primary — the TinyFish orange badge */
+    --primary: 20 80% 51%;         /* #E85A1A */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 0 0% 93%;
+    --secondary-foreground: 0 0% 10%;
+
+    --muted: 0 0% 87%;
+    --muted-foreground: 0 0% 42%;
+
+    --accent: 0 0% 87%;
+    --accent-foreground: 0 0% 7%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 0 0% 82%;            /* hairline grid lines */
+    --input: 0 0% 82%;
+    --ring: 20 80% 51%;
+
+    --radius: 0rem;                /* TinyFish: no border radius */
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  /* Thin hairline borders everywhere — TinyFish grid aesthetic */
+  .grid-border {
+    border: 1px solid hsl(var(--border));
+  }
+}
+
+@layer utilities {
+  /* Label / metadata style — uppercase tracked */
+  .label-meta {
+    @apply text-xs tracking-widest uppercase text-muted-foreground font-normal;
+  }
+  /* Large display numbers */
+  .num-display {
+    @apply font-mono text-muted-foreground text-sm tracking-wider;
+  }
+  /* Section divider */
+  .section-divider {
+    @apply border-t border-border;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: hsl(var(--muted)); }

@@ -1,0 +1,294 @@
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * AgnusAI — VitePress Theme
+ * TinyFish-inspired editorial aesthetic matching the dashboard and landing page.
+ *
+ * THEMING: edit the variables in :root (light) and .dark (dark) below.
+ * Everything — colors, fonts, radius, border width — is driven by these vars.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+
+/* ── Light mode ──────────────────────────────────────────────────────────── */
+:root {
+  /* Brand */
+  --agnus-orange: #E85A1A;
+
+  /* Surfaces */
+  --agnus-bg:      #EBEBEA;   /* page background */
+  --agnus-surface: #F3F3F2;   /* sidebar, cards */
+  --agnus-border:  #D1D1CF;   /* hairline borders */
+
+  /* Text */
+  --agnus-text:    #111111;
+  --agnus-muted:   #6B6B6B;
+
+  /* Typography */
+  --agnus-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --agnus-font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Shape */
+  --agnus-radius: 0px;        /* set to e.g. 6px for rounded corners */
+  --agnus-border-width: 1px;
+
+  /* ── Map to VitePress vars ── */
+  --vp-font-family-base: var(--agnus-font-sans);
+  --vp-font-family-mono: var(--agnus-font-mono);
+
+  --vp-c-brand-1:   var(--agnus-orange);
+  --vp-c-brand-2:   #c44e16;
+  --vp-c-brand-3:   #a84013;
+  --vp-c-brand-soft: rgba(232, 90, 26, 0.1);
+
+  --vp-c-bg:        var(--agnus-bg);
+  --vp-c-bg-soft:   var(--agnus-surface);
+  --vp-c-bg-mute:   var(--agnus-surface);
+  --vp-c-bg-alt:    var(--agnus-surface);
+
+  --vp-c-border:    var(--agnus-border);
+  --vp-c-divider:   var(--agnus-border);
+
+  --vp-c-text-1:    var(--agnus-text);
+  --vp-c-text-2:    var(--agnus-muted);
+  --vp-c-text-3:    #999999;
+
+  --vp-c-default-1: var(--agnus-text);
+  --vp-c-tip-1:     var(--agnus-orange);
+  --vp-c-tip-soft:  rgba(232, 90, 26, 0.08);
+
+  --vp-custom-block-tip-border:     var(--agnus-orange);
+  --vp-custom-block-tip-text:       var(--agnus-text);
+  --vp-custom-block-tip-bg:         rgba(232, 90, 26, 0.06);
+  --vp-custom-block-tip-code-bg:    rgba(232, 90, 26, 0.08);
+
+  --vp-button-brand-bg:          var(--agnus-orange);
+  --vp-button-brand-hover-bg:    #c44e16;
+  --vp-button-brand-active-bg:   #a84013;
+  --vp-button-brand-border:      var(--agnus-orange);
+  --vp-button-brand-hover-border: #c44e16;
+  --vp-button-brand-text:        #ffffff;
+  --vp-button-brand-hover-text:  #ffffff;
+  --vp-button-brand-active-text: #ffffff;
+
+  --vp-button-alt-bg:            var(--agnus-surface);
+  --vp-button-alt-hover-bg:      var(--agnus-border);
+  --vp-button-alt-border:        var(--agnus-border);
+
+  --vp-nav-bg-color:             var(--agnus-bg);
+  --vp-sidebar-bg-color:         var(--agnus-surface);
+
+  --vp-code-bg:         #e8e8e6;
+  --vp-code-color:      var(--agnus-orange);
+
+  --vp-home-hero-name-color:       var(--agnus-text);
+  --vp-home-hero-name-background:  none;
+  --vp-home-hero-image-background-image: none;
+}
+
+/* ── Dark mode ───────────────────────────────────────────────────────────── */
+.dark {
+  /* Surfaces */
+  --agnus-bg:      #141413;
+  --agnus-surface: #1C1C1B;
+  --agnus-border:  #2E2E2C;
+
+  /* Text */
+  --agnus-text:    #EBEBEA;
+  --agnus-muted:   #888884;
+
+  --vp-c-bg:        var(--agnus-bg);
+  --vp-c-bg-soft:   var(--agnus-surface);
+  --vp-c-bg-mute:   var(--agnus-surface);
+  --vp-c-bg-alt:    var(--agnus-surface);
+
+  --vp-c-border:    var(--agnus-border);
+  --vp-c-divider:   var(--agnus-border);
+
+  --vp-c-text-1:    var(--agnus-text);
+  --vp-c-text-2:    var(--agnus-muted);
+
+  --vp-nav-bg-color:         var(--agnus-bg);
+  --vp-sidebar-bg-color:     var(--agnus-surface);
+
+  --vp-code-bg:     #252523;
+  --vp-code-color:  #f0a070;
+}
+
+/* ── Typography ──────────────────────────────────────────────────────────── */
+body {
+  font-feature-settings: "rlig" 1, "calt" 1;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ── Nav ─────────────────────────────────────────────────────────────────── */
+.VPNav {
+  border-bottom: var(--agnus-border-width) solid var(--agnus-border) !important;
+}
+
+.VPNavBar .title {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Orange pill on active nav items */
+.VPNavBarMenuLink.active,
+.VPNavBarMenuLink:hover {
+  color: var(--agnus-orange) !important;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────────────────────── */
+.VPSidebar {
+  border-right: var(--agnus-border-width) solid var(--agnus-border) !important;
+}
+
+.VPSidebarItem.is-active > .item .link .text {
+  color: var(--agnus-orange);
+  font-weight: 600;
+}
+
+/* Sidebar section headers: uppercase tracked label style */
+.VPSidebarItem.level-0 > .item .text {
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--agnus-muted);
+  font-weight: 400;
+}
+
+/* ── Content ─────────────────────────────────────────────────────────────── */
+.VPContent {
+  padding-top: 0 !important;
+}
+
+/* Headings */
+.vp-doc h1 {
+  font-size: clamp(1.8rem, 4vw, 2.6rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  margin-bottom: 1.2rem;
+}
+
+.vp-doc h2 {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  border-top: var(--agnus-border-width) solid var(--agnus-border);
+  padding-top: 1.5rem;
+  margin-top: 2.5rem;
+}
+
+.vp-doc h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+/* Tables: no radius, thin borders */
+.vp-doc table {
+  border-radius: 0 !important;
+  border: var(--agnus-border-width) solid var(--agnus-border);
+}
+.vp-doc th {
+  background: var(--agnus-surface);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.vp-doc td, .vp-doc th {
+  border: var(--agnus-border-width) solid var(--agnus-border);
+}
+
+/* Code blocks */
+.vp-doc div[class*="language-"] {
+  border-radius: var(--agnus-radius) !important;
+  border: var(--agnus-border-width) solid var(--agnus-border);
+}
+
+/* Inline code */
+.vp-doc :not(pre) > code {
+  border-radius: 0 !important;
+  font-size: 0.82em;
+  padding: 1px 5px;
+  background: var(--vp-code-bg);
+  color: var(--vp-code-color);
+}
+
+/* Custom blocks (tip, warning, etc.) */
+.vp-doc .custom-block {
+  border-radius: var(--agnus-radius) !important;
+  border-width: var(--agnus-border-width) !important;
+}
+
+/* Blockquotes */
+.vp-doc blockquote {
+  border-left: 3px solid var(--agnus-orange);
+  background: var(--agnus-surface);
+  color: var(--agnus-muted);
+}
+
+/* ── Home page hero ──────────────────────────────────────────────────────── */
+.VPHero .name {
+  font-size: clamp(2.8rem, 7vw, 5.5rem) !important;
+  font-weight: 900 !important;
+  letter-spacing: -0.04em !important;
+  line-height: 0.96 !important;
+}
+
+.VPHero .text {
+  font-size: 1rem !important;
+  font-weight: 400 !important;
+  color: var(--agnus-muted) !important;
+  font-family: var(--agnus-font-mono);
+  max-width: 480px;
+}
+
+.VPHero .tagline {
+  font-family: var(--agnus-font-mono);
+  font-size: 0.85rem !important;
+  color: var(--agnus-muted) !important;
+}
+
+/* Home page feature cards */
+.VPFeature {
+  border-radius: var(--agnus-radius) !important;
+  border: var(--agnus-border-width) solid var(--agnus-border) !important;
+  background: var(--agnus-surface) !important;
+  transition: border-color 0.15s;
+}
+.VPFeature:hover {
+  border-color: var(--agnus-orange) !important;
+}
+.VPFeature .icon {
+  font-size: 1.4rem;
+}
+.VPFeature .title {
+  font-size: 0.9rem !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.005em;
+}
+.VPFeature .details {
+  font-size: 0.8rem !important;
+  color: var(--agnus-muted) !important;
+  line-height: 1.65 !important;
+}
+
+/* ── Footer ──────────────────────────────────────────────────────────────── */
+.VPFooter {
+  border-top: var(--agnus-border-width) solid var(--agnus-border) !important;
+  background: var(--agnus-surface) !important;
+}
+
+.VPFooter .message,
+.VPFooter .copyright {
+  font-size: 0.72rem !important;
+  letter-spacing: 0.04em;
+  color: var(--agnus-muted) !important;
+}
+
+/* ── Local search ────────────────────────────────────────────────────────── */
+.VPLocalSearchBox .search-input {
+  border-radius: var(--agnus-radius) !important;
+}
