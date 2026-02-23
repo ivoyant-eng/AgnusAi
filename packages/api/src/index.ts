@@ -506,9 +506,12 @@ async function main() {
   await app.listen({ port, host })
 }
 
-main().catch(err => {
-  console.error('Fatal:', err)
-  process.exit(1)
-})
+// Only start the server when run directly (not when imported by tests)
+if (require.main === module) {
+  main().catch(err => {
+    console.error('Fatal:', err)
+    process.exit(1)
+  })
+}
 
 export { buildServer }

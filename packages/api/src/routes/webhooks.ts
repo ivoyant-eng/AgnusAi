@@ -29,7 +29,15 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const repoId = Buffer.from(repoUrl).toString('base64url').slice(0, 32)
 
     if (event === 'push') {
-      // Incremental index for changed files
+      // Extract the branch from refs/heads/<branch>
+      const branch = ((payload.ref as string) ?? '').replace('refs/heads/', '') || 'main'
+
+      // Only update if this branch is indexed
+      const isBranchIndexed = await isIndexedBranch(pool, repoId, branch)
+      if (!isBranchIndexed) {
+        return reply.status(200).send({ ok: true })
+      }
+
       const commits = (payload.commits as any[]) ?? []
       const changedFiles: string[] = []
       for (const commit of commits) {
@@ -42,8 +50,8 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       if (uniqueFiles.length > 0) {
         setImmediate(async () => {
           try {
-            const entry = await getOrLoadRepo(repoId)
-            await entry.indexer.incrementalUpdate(uniqueFiles, repoId)
+            const entry = await getOrLoadRepo(repoId, branch)
+            await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch)
           } catch (err) {
             console.error('[webhook] Incremental index failed:', (err as Error).message)
           }
@@ -53,7 +61,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       const action = payload.action as string
       if (action === 'opened' || action === 'synchronize') {
         const prNumber = (payload.pull_request as any)?.number as number
-        const diff = (payload.pull_request as any)?.diff_url as string | undefined
+        const baseBranch = ((payload.pull_request as any)?.base?.ref as string) ?? 'main'
 
         setImmediate(async () => {
           try {
@@ -62,6 +70,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
               repoId,
               repoUrl,
               prNumber,
+              baseBranch,
               token: await getRepoToken(pool, repoId),
             })
           } catch (err) {
@@ -87,6 +96,16 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const repoId = Buffer.from(repoUrl).toString('base64url').slice(0, 32)
 
     if (eventType === 'git.push') {
+      // Extract branch from refUpdates[0].name (refs/heads/<branch>)
+      const refUpdates = (payload.resource as any)?.refUpdates as any[] ?? []
+      const branch = ((refUpdates[0]?.name as string) ?? '').replace('refs/heads/', '') || 'main'
+
+      // Only update if this branch is indexed
+      const isBranchIndexed = await isIndexedBranch(pool, repoId, branch)
+      if (!isBranchIndexed) {
+        return reply.status(200).send({ ok: true })
+      }
+
       const commits = (payload.resource as any)?.commits as any[] ?? []
       const changedFiles: string[] = []
       for (const commit of commits) {
@@ -100,8 +119,8 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       if (uniqueFiles.length > 0) {
         setImmediate(async () => {
           try {
-            const entry = await getOrLoadRepo(repoId)
-            await entry.indexer.incrementalUpdate(uniqueFiles, repoId)
+            const entry = await getOrLoadRepo(repoId, branch)
+            await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch)
           } catch (err) {
             console.error('[webhook:azure] Incremental index failed:', (err as Error).message)
           }
@@ -112,6 +131,9 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       eventType === 'git.pullrequest.updated'
     ) {
       const prId = (payload.resource as any)?.pullRequestId as number
+      const targetRef = ((payload.resource as any)?.targetRefName as string) ?? 'refs/heads/main'
+      const baseBranch = targetRef.replace('refs/heads/', '') || 'main'
+
       setImmediate(async () => {
         try {
           await runReview({
@@ -119,6 +141,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
             repoId,
             repoUrl,
             prNumber: prId,
+            baseBranch,
             token: await getRepoToken(pool, repoId),
           })
         } catch (err) {
@@ -152,4 +175,22 @@ async function getRepoToken(pool: Pool, repoId: string): Promise<string | undefi
     [repoId],
   )
   return res.rows[0]?.token ?? undefined
+}
+
+/**
+ * Check if a branch is registered in repo_branches.
+ * Returns true only if the repo_branches table doesn't exist yet (graceful degradation
+ * for deployments that haven't migrated). All other DB errors are re-thrown.
+ */
+async function isIndexedBranch(pool: Pool, repoId: string, branch: string): Promise<boolean> {
+  try {
+    const res = await pool.query(
+      'SELECT 1 FROM repo_branches WHERE repo_id = $1 AND branch = $2',
+      [repoId, branch],
+    )
+    return res.rows.length > 0
+  } catch (err: any) {
+    if (err?.code === '42P01') return true // table does not exist — backwards compat
+    throw err
+  }
 }

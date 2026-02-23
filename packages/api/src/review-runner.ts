@@ -17,10 +17,11 @@ export interface ReviewRunOptions {
   repoUrl: string
   prNumber: number
   token?: string
+  baseBranch: string
 }
 
 export async function runReview(opts: ReviewRunOptions): Promise<void> {
-  const { platform, repoId, repoUrl, prNumber, token } = opts
+  const { platform, repoId, repoUrl, prNumber, token, baseBranch } = opts
 
   // Parse owner/repo from URL
   const urlParts = repoUrl.replace(/\/$/, '').split('/')
@@ -47,9 +48,9 @@ export async function runReview(opts: ReviewRunOptions): Promise<void> {
     tickets: [],
     llm: {
       provider: (process.env.LLM_PROVIDER as any) ?? 'ollama',
-      model: process.env.LLM_MODEL ?? 'qwen2.5-coder',
+      model: process.env.LLM_MODEL ?? 'qwen3.5:397b-cloud',
       providers: {
-        ollama: { baseURL: process.env.LLM_BASE_URL ?? 'http://ollama:11434/v1' },
+        ollama: { baseURL: process.env.LLM_BASE_URL ?? 'http://localhost:11434/v1' },
       },
     },
     review: {
@@ -75,9 +76,9 @@ export async function runReview(opts: ReviewRunOptions): Promise<void> {
   agent.setVCS(vcs)
   agent.setLLM(llm)
 
-  // Assemble graph context if a graph is already loaded for this repo
+  // Assemble graph context from the base branch's graph (gracefully degraded if not indexed)
   let graphContext: GraphReviewContext | undefined
-  const entry = getRepo(repoId)
+  const entry = getRepo(repoId, baseBranch)
   if (entry) {
     const diff = await fetchDiffString(vcs, prNumber)
     if (diff) {
