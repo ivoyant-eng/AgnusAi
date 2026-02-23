@@ -38,6 +38,7 @@ module.exports = {
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
+        display: [ 'sans-serif'],
       },
       letterSpacing: {
         widest: '0.2em',
@@ -47,6 +48,8 @@ module.exports = {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
         ticker: 'ticker 30s linear infinite',
+        'ticker-32': 'ticker 32s linear infinite',
+        blink: 'blink 1.1s step-end infinite',
       },
       keyframes: {
         'accordion-down': {
@@ -60,6 +63,10 @@ module.exports = {
         ticker: {
           '0%': { transform: 'translateX(0)' },
           '100%': { transform: 'translateX(-50%)' },
+        },
+        blink: {
+          '0%, 100%': { opacity: '1' },
+          '50%': { opacity: '0' },
         },
       },
     },
