@@ -27,33 +27,79 @@ program
   .command('review')
   .description('Review a pull request')
   .requiredOption('--pr <number>', 'Pull request number')
-  .requiredOption('--repo <repo>', 'Repository (owner/repo format)')
-  .option('--vcs <vcs>', 'VCS platform (github|azure)', 'github')
-  .option('--skill <skill>', 'Review skill to use', 'default')
-  .option('--provider <provider>', 'LLM provider (ollama|openai|azure|custom)', 'ollama')
-  .option('--model <model>', 'LLM model to use')
-  .option('--dry-run', 'Show review without posting', false)
-  .option('--output <format>', 'Output format (json|markdown)', 'markdown')
+  .option('--repo <repo>', 'Repository in owner/repo format (standalone mode)')
+  .option('--base-branch <branch>', 'Base branch the PR targets (default: main)', 'main')
+  // ── Hosted service mode ──────────────────────────────────────────────────
+  .option('--server <url>', 'AgnusAI server URL — delegates review to the server')
+  .option('--api-key <key>', 'API key for the AgnusAI server (set API_KEY in server .env)')
+  .option('--repo-id <id>', 'Repository ID from the dashboard (required with --server)')
+  // ── Standalone mode ──────────────────────────────────────────────────────
+  .option('--vcs <vcs>', 'VCS platform: github | azure (standalone only)', 'github')
+  .option('--provider <provider>', 'LLM provider: ollama | openai | claude | azure (standalone only)', 'ollama')
+  .option('--model <model>', 'Override LLM model name (standalone only)')
+  .option('--dry-run', 'Print review without posting comments', false)
+  .option('--output <format>', 'Output format: json | markdown', 'markdown')
   .option('--config <path>', 'Path to config file', DEFAULT_CONFIG_PATH)
-  .option('--incremental', 'Only review changes since last checkpoint (GitHub only)', false)
+  .option('--incremental', 'Only review new commits since last checkpoint (GitHub standalone only)', false)
   .option('--force-full', 'Force full review, ignoring checkpoint', false)
+  .option('--skill <skill>', 'Review skill to use', 'default')
   .action(async (options) => {
     try {
+
+      // ── Hosted service mode ─────────────────────────────────────────────
+      if (options.server) {
+        if (!options.repoId) {
+          console.error('--repo-id is required when using --server mode.\nFind it in the dashboard URL: /app/ready/<repoId>');
+          process.exit(1);
+        }
+
+        const serverUrl = options.server.replace(/\/$/, '');
+        const url = `${serverUrl}/api/repos/${options.repoId}/review`;
+
+        console.log(`\nTriggering review on ${serverUrl} for PR #${options.pr}...\n`);
+
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (options.apiKey) headers['Authorization'] = `Bearer ${options.apiKey}`;
+
+        const res = await fetch(url, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            prNumber: Number(options.pr),
+            baseBranch: options.baseBranch,
+          }),
+        });
+
+        const body = await res.json() as Record<string, unknown>;
+
+        if (!res.ok) {
+          console.error(`Review failed (HTTP ${res.status}): ${body.error ?? JSON.stringify(body)}`);
+          process.exit(1);
+        }
+
+        console.log(`Verdict:   ${body.verdict}`);
+        console.log(`Comments:  ${body.commentCount}`);
+        console.log(`\nReview posted to PR #${options.pr}.`);
+
+        if (options.output === 'json') console.log(JSON.stringify(body, null, 2));
+        return;
+      }
+
+      // ── Standalone mode ─────────────────────────────────────────────────
+      if (!options.repo) {
+        console.error('--repo is required in standalone mode (use --server for hosted service mode).');
+        process.exit(1);
+      }
+
       // Load config
       const config = loadConfig(options.config);
-      
-      // Override with CLI options
-      if (options.provider) {
-        config.llm.provider = options.provider as ProviderName;
-      }
-      if (options.model) {
-        config.llm.model = options.model;
-      }
+      if (options.provider) config.llm.provider = options.provider as ProviderName;
+      if (options.model)    config.llm.model    = options.model;
 
       // Parse repo
       const [owner, repo] = options.repo.split('/');
       if (!owner || !repo) {
-        console.error('Invalid repo format. Use: owner/repo');
+        console.error('Invalid --repo format. Use: owner/repo');
         process.exit(1);
       }
 
@@ -62,15 +108,15 @@ program
       if (options.vcs === 'github') {
         const token = process.env.GITHUB_TOKEN || config.vcs.github?.token;
         if (!token) {
-          console.error('GitHub token required. Set GITHUB_TOKEN env or config.');
+          console.error('GitHub token required. Set GITHUB_TOKEN env var or config.');
           process.exit(1);
         }
         vcs = new GitHubAdapter({ token, owner, repo });
       } else if (options.vcs === 'azure') {
         const azureConfig = config.vcs.azure;
         const organization = process.env.AZURE_DEVOPS_ORG ?? azureConfig?.organization;
-        const project = process.env.AZURE_DEVOPS_PROJECT ?? azureConfig?.project;
-        const token = process.env.AZURE_DEVOPS_TOKEN ?? azureConfig?.token;
+        const project      = process.env.AZURE_DEVOPS_PROJECT ?? azureConfig?.project;
+        const token        = process.env.AZURE_DEVOPS_TOKEN ?? azureConfig?.token;
         if (!organization || !project || !token) {
           console.error(
             'Azure DevOps config required.\n' +
@@ -79,60 +125,42 @@ program
           );
           process.exit(1);
         }
-        vcs = new AzureDevOpsAdapter({
-          organization,
-          project,
-          repository: repo,
-          token,
-        });
+        vcs = new AzureDevOpsAdapter({ organization, project, repository: repo, token });
       } else {
-        console.error(`Unknown VCS: ${options.vcs}`);
+        console.error(`Unknown --vcs value: ${options.vcs}`);
         process.exit(1);
       }
 
-      // Initialize LLM backend using unified connector
-      const llmConfig = getLLMConfig(config.llm);
-      const llm = new UnifiedLLMBackend(llmConfig);
-
-      // Initialize skills
-      const skillsPath = config.skills?.path || DEFAULT_SKILLS_PATH;
-      const skillLoader = new SkillLoader(skillsPath);
-
-      // Create agent
+      const llm   = new UnifiedLLMBackend(getLLMConfig(config.llm));
       const agent = new PRReviewAgent(config);
       agent.setVCS(vcs);
       agent.setLLM(llm);
 
-      console.log(`\n🔍 Reviewing PR #${options.pr} in ${owner}/${repo}...\n`);
+      console.log(`\nReviewing PR #${options.pr} in ${owner}/${repo}...\n`);
 
-      // Run review - use incremental mode if requested
       let result;
       if (options.incremental && options.vcs === 'github') {
         result = await agent.incrementalReview(Number(options.pr), {
           forceFull: options.forceFull,
-          skipCheckpoint: options.dryRun
+          skipCheckpoint: options.dryRun,
         });
       } else {
-        if (options.incremental) {
-          console.log('⚠️  Incremental review only supported for GitHub. Running full review.');
-        }
+        if (options.incremental) console.log('Incremental mode only supported for GitHub — running full review.');
         result = await agent.review(Number(options.pr));
       }
 
-      // Output result
       if (options.output === 'json') {
         console.log(JSON.stringify(result, null, 2));
       } else {
         printMarkdownReview(result);
       }
 
-      // Post review if not dry-run
       if (!options.dryRun) {
-        console.log('\n📤 Posting review...');
+        console.log('\nPosting review...');
         await agent.postReview(Number(options.pr), result);
-        console.log('✅ Review posted successfully!');
+        console.log('Review posted successfully.');
       } else {
-        console.log('\n💨 Dry run - review not posted.');
+        console.log('\nDry run — review not posted.');
       }
 
     } catch (error) {

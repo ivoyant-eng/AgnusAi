@@ -1,15 +1,22 @@
 {
   "name": "@agnus-ai/reviewer",
   "version": "0.1.0",
-  "description": "AI-powered PR review agent with skills-based review system",
+  "description": "AI-powered PR review agent with graph-aware blast radius analysis",
   "main": "dist/index.js",
   "bin": {
     "agnus": "./dist/cli.js",
     "pr-review": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/cli.js",
+    "build": "tsup && tsc --declaration --emitDeclarationOnly --noEmit false",
     "dev": "ts-node src/cli.ts",
     "test": "jest",
     "lint": "eslint src/**/*.ts"
@@ -20,12 +27,12 @@
     "ai",
     "ollama",
     "github",
-    "azure-devops"
+    "azure-devops",
+    "graph-aware"
   ],
   "author": "Ashish Maurya",
   "license": "MIT",
   "dependencies": {
-    "@agnus-ai/shared": "workspace:*",
     "@ai-sdk/openai-compatible": "^2.0.30",
     "@octokit/rest": "^20.0.2",
     "ai": "^6.0.91",
@@ -34,12 +41,14 @@
     "node-fetch": "^2.7.0"
   },
   "devDependencies": {
+    "@agnus-ai/shared": "workspace:*",
     "@types/jest": "^30.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.10.0",
     "@types/node-fetch": "^2.6.9",
     "jest": "^30.2.0",
     "ts-jest": "^29.4.6",
+    "tsup": "^8.3.0",
     "typescript": "^5.3.0"
   },
   "engines": {
