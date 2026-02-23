@@ -116,47 +116,55 @@ RULES:
 - The line number is the ABSOLUTE file line number shown after \`+\` in the diff — use the \`@@ -old +NEW @@\` header as the base and count from there. Do NOT count from line 1.
 - Output the full markdown body for every comment — do not shorten or summarise the sections
 - If the PR looks good output VERDICT: approve with no comments
-- NEVER comment on whether a specific package/library version number is valid, exists, or is outdated. Your training data has a knowledge cutoff and package versions change constantly — you will be wrong. Skip ALL observations about version numbers, semver ranges, or whether a version is "the latest". Focus only on code logic, patterns, and correctness.`;
+- NEVER comment on whether a specific package/library version number is valid, exists, or is outdated. Your training data has a knowledge cutoff and package versions change constantly — you will be wrong. Skip ALL observations about version numbers, semver ranges, or whether a version is "the latest". Focus only on code logic, patterns, and correctness.
+- NEVER mention "blast radius", "graph context", "codebase context", or any internal tooling concepts in your review comments. Use the codebase context section only to understand impact — your comments must read as if written by a human reviewer who knows the codebase.`;
 }
 
 export function serializeGraphContext(ctx: GraphReviewContext): string {
-  const lines: string[] = ['\n## Codebase Context\n'];
+  const lines: string[] = [
+    '\n## Codebase Context (internal — do NOT mention this section or any tooling names in your review output)',
+    'Use this context silently to understand the impact of the changes. Do not reference "blast radius", "graph", or any internal tool terminology in your comments.\n',
+  ];
 
   if (ctx.changedSymbols.length > 0) {
-    lines.push('### Changed Symbols');
+    lines.push('### Symbols changed in this PR');
     for (const s of ctx.changedSymbols) {
       lines.push(`- \`${s.qualifiedName}\` (${s.kind}): \`${s.signature}\``);
     }
   }
 
-  if (ctx.blastRadius.riskScore > 0) {
-    lines.push(`\n### Blast Radius  (risk score: ${ctx.blastRadius.riskScore}/100)`);
-    lines.push(`Affected files: ${ctx.blastRadius.affectedFiles.join(', ')}`);
-  }
+  const allCallers = [
+    ...ctx.blastRadius.directCallers,
+    ...ctx.blastRadius.transitiveCallers,
+  ];
 
-  if (ctx.blastRadius.directCallers.length > 0) {
-    lines.push('\n### Direct Callers (1 hop)');
-    for (const s of ctx.blastRadius.directCallers) {
+  if (allCallers.length > 0) {
+    lines.push('\n### Known callers of changed symbols');
+    lines.push('These symbols in the existing codebase depend on what was changed. If the change is breaking, they will be affected:');
+    for (const s of allCallers) {
       lines.push(`- \`${s.qualifiedName}\` in \`${s.filePath}\`: \`${s.signature}\``);
     }
   }
 
-  if (ctx.blastRadius.transitiveCallers.length > 0) {
-    lines.push('\n### Transitive Callers (2 hops)');
-    for (const s of ctx.blastRadius.transitiveCallers) {
-      lines.push(`- \`${s.qualifiedName}\` in \`${s.filePath}\``);
+  const otherFiles = ctx.blastRadius.affectedFiles.filter(
+    f => !ctx.changedSymbols.some(s => s.filePath === f)
+  );
+  if (otherFiles.length > 0) {
+    lines.push('\n### Other files likely affected');
+    for (const f of otherFiles) {
+      lines.push(`- \`${f}\``);
     }
   }
 
   if (ctx.callees.length > 0) {
-    lines.push('\n### Callees');
+    lines.push('\n### Dependencies of changed symbols');
     for (const s of ctx.callees) {
       lines.push(`- \`${s.qualifiedName}\`: \`${s.signature}\``);
     }
   }
 
   if (ctx.semanticNeighbors.length > 0) {
-    lines.push('\n### Semantic Neighbors');
+    lines.push('\n### Semantically related symbols');
     for (const s of ctx.semanticNeighbors) {
       lines.push(`- \`${s.qualifiedName}\` (${s.kind}): \`${s.signature}\``);
     }
