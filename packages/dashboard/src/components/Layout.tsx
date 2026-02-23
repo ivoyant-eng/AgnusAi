@@ -1,5 +1,6 @@
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/hooks/useAuth'
 
 const NAV_ITEMS = [
   { href: '/app', label: 'Dashboard' },
@@ -9,6 +10,14 @@ const NAV_ITEMS = [
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const { user, mutate } = useAuth()
+
+  async function handleSignOut() {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
+    await mutate(null)
+    navigate('/login')
+  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -25,24 +34,41 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </span>
           </div>
 
-          <nav className="flex items-center gap-0">
-            {NAV_ITEMS.map((item) => {
-              const isActive = pathname === item.href ||
-                (item.href !== '/app' && pathname.startsWith(item.href))
-              return (
-                <Link
-                  key={item.href}
-                  to={item.href}
-                  className={cn(
-                    'label-meta px-4 h-12 flex items-center border-l border-border hover:text-foreground transition-colors',
-                    isActive ? 'text-foreground border-b-2 border-b-foreground' : ''
-                  )}
+          <div className="flex items-center gap-0">
+            <nav className="flex items-center gap-0">
+              {NAV_ITEMS.map((item) => {
+                const isActive = pathname === item.href ||
+                  (item.href !== '/app' && pathname.startsWith(item.href))
+                return (
+                  <Link
+                    key={item.href}
+                    to={item.href}
+                    className={cn(
+                      'label-meta px-4 h-12 flex items-center border-l border-border hover:text-foreground transition-colors',
+                      isActive ? 'text-foreground border-b-2 border-b-foreground' : ''
+                    )}
+                  >
+                    {item.label}
+                  </Link>
+                )
+              })}
+            </nav>
+
+            {/* User + sign out */}
+            {user && (
+              <div className="flex items-center border-l border-border h-12">
+                <span className="label-meta px-4 text-muted-foreground hidden md:block">
+                  {user.email}
+                </span>
+                <button
+                  onClick={handleSignOut}
+                  className="label-meta px-4 h-12 flex items-center border-l border-border hover:text-foreground transition-colors"
                 >
-                  {item.label}
-                </Link>
-              )
-            })}
-          </nav>
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
