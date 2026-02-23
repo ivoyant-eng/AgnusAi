@@ -20,27 +20,28 @@ export interface ReviewRunOptions {
   baseBranch: string
 }
 
-export async function runReview(opts: ReviewRunOptions): Promise<void> {
+export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number }> {
   const { platform, repoId, repoUrl, prNumber, token, baseBranch } = opts
-
-  // Parse owner/repo from URL
-  const urlParts = repoUrl.replace(/\/$/, '').split('/')
-  const repo = urlParts[urlParts.length - 1] ?? ''
-  const owner = urlParts[urlParts.length - 2] ?? ''
 
   // Build VCS adapter
   let vcs
   if (platform === 'github') {
     if (!token) throw new Error('GitHub token required for review')
+    // https://github.com/{owner}/{repo}
+    const urlParts = repoUrl.replace(/\/$/, '').split('/')
+    const owner = urlParts[urlParts.length - 2] ?? ''
+    const repo = urlParts[urlParts.length - 1] ?? ''
     vcs = new GitHubAdapter({ token, owner, repo })
   } else {
     if (!token) throw new Error('Azure token required for review')
-    vcs = new AzureDevOpsAdapter({
-      organization: owner,
-      project: repo,
-      repository: repo,
-      token,
-    })
+    // https://dev.azure.com/{org}/{project}/_git/{repo}
+    const url = new URL(repoUrl)
+    const parts = url.pathname.split('/').filter(Boolean)
+    // parts: ['org', 'project', '_git', 'repo']
+    const organization = parts[0] ?? ''
+    const project = parts[1] ?? ''
+    const repository = parts[parts.length - 1] ?? ''
+    vcs = new AzureDevOpsAdapter({ organization, project, repository, token })
   }
 
   const config: Config = {
@@ -88,6 +89,10 @@ export async function runReview(opts: ReviewRunOptions): Promise<void> {
 
   const result = await agent.review(prNumber, graphContext)
   await agent.postReview(prNumber, result)
+  return {
+    verdict: (result as any).verdict ?? 'unknown',
+    commentCount: Array.isArray((result as any).comments) ? (result as any).comments.length : 0,
+  }
 }
 
 async function fetchDiffString(vcs: any, prNumber: number): Promise<string | null> {
