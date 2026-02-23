@@ -35,13 +35,14 @@ export interface GraphReviewContext {
 }
 
 export interface IndexProgress {
-  step: 'parsing' | 'embedding' | 'done'
+  step: 'parsing' | 'embedding' | 'done' | 'error'
   file?: string
   progress?: number
   total?: number
   symbolCount?: number
   edgeCount?: number
   durationMs?: number
+  message?: string
 }
 
 export interface IndexStats {
