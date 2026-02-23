@@ -68,15 +68,22 @@ program
         vcs = new GitHubAdapter({ token, owner, repo });
       } else if (options.vcs === 'azure') {
         const azureConfig = config.vcs.azure;
-        if (!azureConfig) {
-          console.error('Azure DevOps config required in config file.');
+        const organization = process.env.AZURE_DEVOPS_ORG ?? azureConfig?.organization;
+        const project = process.env.AZURE_DEVOPS_PROJECT ?? azureConfig?.project;
+        const token = process.env.AZURE_DEVOPS_TOKEN ?? azureConfig?.token;
+        if (!organization || !project || !token) {
+          console.error(
+            'Azure DevOps config required.\n' +
+            'Set AZURE_DEVOPS_ORG, AZURE_DEVOPS_PROJECT, AZURE_DEVOPS_TOKEN env vars\n' +
+            'or add vcs.azure to ~/.pr-review/config.yaml'
+          );
           process.exit(1);
         }
         vcs = new AzureDevOpsAdapter({
-          organization: azureConfig.organization,
-          project: azureConfig.project,
+          organization,
+          project,
           repository: repo,
-          token: azureConfig.token
+          token,
         });
       } else {
         console.error(`Unknown VCS: ${options.vcs}`);

@@ -103,14 +103,19 @@ docker compose up --build
 This starts:
 - **AgnusAI API** on `http://localhost:3000`
 - **Postgres + pgvector** on port 5432
-- **Ollama** on port 11434 (pull models separately)
+
+> Ollama runs on your host, not inside Docker. The container connects to `host.docker.internal:11434` by default.
 
 ### 3. Pull LLM models (first time)
 
+AgnusAI connects to Ollama running **on your host** (not inside Docker). Pull models directly:
+
 ```bash
-docker compose exec ollama ollama pull qwen2.5-coder
-docker compose exec ollama ollama pull qwen3-embedding:0.6b   # only if EMBEDDING_PROVIDER=ollama
+ollama pull qwen2.5-coder
+ollama pull qwen3-embedding:0.6b   # only if EMBEDDING_PROVIDER=ollama
 ```
+
+> If Ollama is not installed: [ollama.ai/download](https://ollama.ai/download). The container reaches it at `host.docker.internal:11434`.
 
 ### 4. Log in to the dashboard
 
@@ -289,6 +294,8 @@ Used only in `REVIEW_DEPTH=deep` mode:
 
 ### GitHub Actions
 
+Add `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`) as a repository secret, then:
+
 ```yaml
 name: AI PR Review
 on:
@@ -303,15 +310,22 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v3
-        with: { version: 8 }
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
       - uses: actions/setup-node@v4
-        with: { node-version: '20' }
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: _agnus/pnpm-lock.yaml
 
       - name: Install AgnusAI
         run: |
-          git clone https://github.com/ivoyant-eng/AgnusAi.git _agnus
-          cd _agnus && pnpm install && pnpm --filter @agnus-ai/reviewer build
+          git clone --depth=1 https://github.com/ivoyant-eng/AgnusAi.git _agnus
+          cd _agnus && pnpm install --frozen-lockfile
+          pnpm --filter @agnus-ai/reviewer build
 
       - name: Run Review
         env:
@@ -324,32 +338,66 @@ jobs:
             --provider claude
 ```
 
+**Using Ollama instead** (self-hosted runner with Ollama installed):
+
+```yaml
+      - name: Run Review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLLAMA_BASE_URL: http://localhost:11434/v1
+        run: |
+          node _agnus/packages/reviewer/dist/cli.js review \
+            --pr ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --provider ollama \
+            --model qwen2.5-coder
+```
+
+---
+
 ### Azure Pipelines
+
+Set these pipeline variables (mark as secret where noted):
+
+| Variable | Value | Secret |
+|----------|-------|--------|
+| `AZURE_DEVOPS_ORG` | your org name (e.g. `ivoyant`) | No |
+| `AZURE_DEVOPS_PROJECT` | your project name (e.g. `PlatformNX`) | No |
+| `ANTHROPIC_API_KEY` | your Anthropic key | Yes |
 
 ```yaml
 trigger: none
-pr: [main]
+pr:
+  branches:
+    include:
+      - '*'
 
 pool:
   vmImage: 'ubuntu-latest'
 
 steps:
   - script: |
-      npm install -g pnpm
-      git clone https://github.com/ivoyant-eng/AgnusAi.git _agnus
-      cd _agnus && pnpm install && pnpm --filter @agnus-ai/reviewer build
+      npm install -g pnpm@9
+      git clone --depth=1 https://github.com/ivoyant-eng/AgnusAi.git _agnus
+      cd _agnus && pnpm install --frozen-lockfile
+      pnpm --filter @agnus-ai/reviewer build
     displayName: Install AgnusAI
 
   - script: |
       node _agnus/packages/reviewer/dist/cli.js review \
         --pr $(System.PullRequest.PullRequestId) \
-        --repo org/$(Build.Repository.Name) \
-        --vcs azure
-    displayName: Run Review
+        --repo $(AZURE_DEVOPS_PROJECT)/$(Build.Repository.Name) \
+        --vcs azure \
+        --provider claude
+    displayName: Run AI Review
     env:
+      AZURE_DEVOPS_ORG: $(AZURE_DEVOPS_ORG)
+      AZURE_DEVOPS_PROJECT: $(AZURE_DEVOPS_PROJECT)
       AZURE_DEVOPS_TOKEN: $(System.AccessToken)
       ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
 ```
+
+> `System.AccessToken` is the built-in pipeline token. Grant it **Contribute to pull requests** permission in Project Settings → Repositories → Security.
 
 ---
 
