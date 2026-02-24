@@ -100,6 +100,8 @@ List all registered repositories.
     "repoUrl": "https://github.com/owner/repo",
     "platform": "github",
     "repoPath": "/tmp/repo",
+    "indexedAt": "2026-02-23T14:42:03.321Z",
+    "symbolCount": 230,
     "createdAt": "2026-02-23T07:06:03.136Z"
   }
 ]
@@ -169,11 +171,93 @@ Get the blast radius for a specific symbol. `symbolId` is URL-encoded `filePath:
 
 ---
 
+### `POST /api/repos/:id/reindex` _(auth required)_
+
+Re-trigger a full index for an already-registered repo. Resets `indexed_at` so the dashboard shows indexing status.
+
+**Response (202):**
+```json
+{"repoId": "aHR0cHM6...", "branches": ["main"], "message": "Reindex started for 1 branch(es)"}
+```
+
+---
+
+### `POST /api/repos/:id/review` _(auth required)_
+
+Manually trigger a review for a specific PR. Runs synchronously — response is returned when the review is complete and posted.
+
+**Request body:**
+```json
+{"prNumber": 42, "baseBranch": "main"}
+```
+
+**Response:**
+```json
+{"verdict": "request_changes", "commentCount": 5, "prNumber": 42, "repoId": "aHR0cHM6..."}
+```
+
+| Verdict | Meaning |
+|---------|---------|
+| `approve` | No issues found |
+| `request_changes` | Issues found — changes requested |
+| `comment` | Neutral comments posted |
+
+---
+
+### `GET /api/repos/:id/feedback-metrics` _(auth required)_
+
+Weekly accepted/rejected feedback counts for a repo. Used by the Dashboard Learning Metrics chart.
+
+**Response:**
+```json
+{
+  "repoId": "aHR0cHM6...",
+  "series": [
+    {"date": "2026-02-17", "accepted": 3, "rejected": 1},
+    {"date": "2026-02-24", "accepted": 5, "rejected": 0}
+  ],
+  "totals": {
+    "accepted": 8,
+    "rejected": 1,
+    "total": 9,
+    "acceptanceRate": 0.89
+  }
+}
+```
+
+`acceptanceRate` is `null` when no ratings exist yet.
+
+---
+
 ### `DELETE /api/repos/:id` _(auth required)_
 
 Deregister a repo. Removes it from the database and evicts it from the in-memory graph cache.
 
 **Response:** 204 No Content
+
+---
+
+## Feedback
+
+### `GET /api/feedback`
+
+Validates a feedback signal from a 👍/👎 link in a review comment. No auth required — tokens are HMAC-signed.
+
+**Query parameters:**
+
+| Param | Description |
+|-------|-------------|
+| `id` | UUID of the review comment |
+| `signal` | `accepted` or `rejected` |
+| `token` | HMAC-SHA256 signature (`commentId:signal` signed with `FEEDBACK_SECRET`) |
+
+**Response (200):** A styled HTML confirmation page (terminal aesthetic).
+
+**Response (400):** `Invalid token.` if the HMAC doesn't match.
+
+::: tip
+Feedback links are automatically appended to review comments when `BASE_URL` and `FEEDBACK_SECRET` (or `WEBHOOK_SECRET`) are set. You don't need to call this endpoint directly.
+:::
 
 ---
 
@@ -191,7 +275,7 @@ Return the 50 most recent reviews across all repos.
     "repoId": "aHR0cHM6...",
     "repoUrl": "https://github.com/owner/repo",
     "prNumber": 42,
-    "verdict": "needs_work",
+    "verdict": "request_changes",
     "commentCount": 5,
     "createdAt": "2026-02-23T09:08:39.562Z"
   }

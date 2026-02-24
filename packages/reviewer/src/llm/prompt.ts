@@ -12,6 +12,13 @@ export function buildReviewPrompt(context: ReviewContext): string {
 
   const graphSection = graphContext ? serializeGraphContext(graphContext) : '';
 
+  const examplesSection = (graphContext?.priorExamples?.length)
+    ? `\n## Examples of feedback your team found helpful\n` +
+      `These are past review comments on this repo that developers marked as useful. ` +
+      `Use them as a guide for the style and depth of feedback that resonates with this team.\n\n` +
+      graphContext.priorExamples.map(e => `---\n${e}`).join('\n\n') + '\n'
+    : ''
+
   const fileList = diff.files
     .map(f => `- ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`)
     .join('\n');
@@ -38,7 +45,7 @@ ${fileList}
 
 ## Diff
 ${diffResult.content}
-${graphSection}${skillContext}
+${graphSection}${skillContext}${examplesSection}
 ${truncationWarning}
 
 ## Review Instructions

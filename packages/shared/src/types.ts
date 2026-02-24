@@ -32,6 +32,7 @@ export interface GraphReviewContext {
   callees: ParsedSymbol[]
   blastRadius: BlastRadius
   semanticNeighbors: ParsedSymbol[]
+  priorExamples?: string[]
 }
 
 export interface IndexProgress {

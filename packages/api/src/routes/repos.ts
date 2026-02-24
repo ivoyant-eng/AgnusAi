@@ -14,7 +14,6 @@ import { loadRepo, getOrLoadRepo, evictRepo } from '../graph-cache'
 import { createEmbeddingAdapter } from '../embedding-factory'
 import { requireAuth } from '../auth/middleware'
 import { runReview } from '../review-runner'
-import crypto from 'crypto'
 
 export async function repoRoutes(app: FastifyInstance): Promise<void> {
   const pool: Pool = app.db
@@ -235,13 +234,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
         prNumber,
         baseBranch,
         token: token ?? undefined,
+        pool,
       })
-
-      // Persist to reviews table
-      await pool.query(
-        `INSERT INTO reviews (id, repo_id, pr_number, verdict, comment_count) VALUES ($1,$2,$3,$4,$5)`,
-        [crypto.randomUUID(), repoId, prNumber, verdict, commentCount],
-      )
 
       return reply.send({ verdict, commentCount, prNumber, repoId })
     } catch (err) {
@@ -259,6 +253,38 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     await pool.query('DELETE FROM repos WHERE repo_id = $1', [repoId])
     evictRepo(repoId) // evicts all branches (no branch arg = evict all)
     return reply.status(204).send()
+  })
+
+  /**
+   * GET /api/repos/:id/feedback-metrics — weekly accepted/rejected feedback counts (auth required)
+   */
+  app.get('/api/repos/:id/feedback-metrics', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { id: repoId } = req.params as { id: string }
+
+    const { rows } = await pool.query(
+      `SELECT
+         DATE_TRUNC('week', rf.created_at)::date AS date,
+         COUNT(CASE WHEN rf.signal = 'accepted' THEN 1 END)::int AS accepted,
+         COUNT(CASE WHEN rf.signal = 'rejected' THEN 1 END)::int AS rejected
+       FROM review_feedback rf
+       JOIN review_comments rc ON rc.id = rf.comment_id
+       WHERE rc.repo_id = $1
+       GROUP BY DATE_TRUNC('week', rf.created_at)
+       ORDER BY date ASC`,
+      [repoId],
+    )
+
+    const totals = rows.reduce(
+      (acc: any, r: any) => ({ accepted: acc.accepted + r.accepted, rejected: acc.rejected + r.rejected }),
+      { accepted: 0, rejected: 0 },
+    )
+    const total = totals.accepted + totals.rejected
+
+    return reply.send({
+      repoId,
+      series: rows.map((r: any) => ({ date: r.date, accepted: r.accepted, rejected: r.rejected })),
+      totals: { ...totals, total, acceptanceRate: total > 0 ? +(totals.accepted / total).toFixed(2) : null },
+    })
   })
 }
 
