@@ -3,6 +3,10 @@
 export { ReviewEngine, ReviewEngineOptions } from './engine';
 export { OutputFormatter, MarkdownFormatter, JsonFormatter, GhActionsFormatter, getFormatter } from './output';
 
+// Precision filter for confidence-based comment filtering
+export { filterByConfidence, DEFAULT_PRECISION_CONFIG, getFilteredReason } from './precision-filter';
+export type { PrecisionFilterConfig, FilteredByConfidence } from './precision-filter';
+
 // Checkpoint exports for incremental reviews
 export {
   parseCheckpoint,

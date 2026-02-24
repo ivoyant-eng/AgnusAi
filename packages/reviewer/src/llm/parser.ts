@@ -64,11 +64,19 @@ export function parseCommentBlocks(response: string): ReviewComment[] {
     const end = i + 1 < markers.length ? markers[i + 1].markerStart : verdictIdx
     const body = response.slice(start, end).trim()
     if (!body) continue
+
+    // Extract confidence score from body (format: [Confidence: X.X])
+    const confidenceMatch = body.match(/\[Confidence:\s*([\d.]+)\]/i)
+    const confidence = confidenceMatch ? parseFloat(confidenceMatch[1]) : undefined
+    // Remove confidence marker from body
+    const cleanBody = body.replace(/\[Confidence:\s*[\d.]+\]\s*/i, '').trim()
+
     comments.push({
       path: markers[i].path,
       line: markers[i].line,
-      body,
+      body: cleanBody,
       severity: detectSeverity(body),
+      confidence: confidence,
     })
   }
 

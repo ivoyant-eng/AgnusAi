@@ -31,6 +31,8 @@ export {
 } from './review/checkpoint';
 
 export * from './types';
+export { filterByConfidence, DEFAULT_PRECISION_CONFIG } from './review/precision-filter';
+export type { PrecisionFilterConfig, FilteredByConfidence } from './review/precision-filter';
 
 import { VCSAdapter } from './adapters/vcs/base';
 import { TicketAdapter } from './adapters/ticket/base';
@@ -42,8 +44,9 @@ import { GitHubAdapter } from './adapters/vcs/github';
 import {
   findCheckpointComment,
   createCheckpoint,
-  generateCheckpointComment
+  generateCheckpointComment,
 } from './review/checkpoint';
+import { filterByConfidence } from './review/precision-filter';
 
 /**
  * Result of an incremental review check
@@ -130,7 +133,8 @@ export class PRReviewAgent {
    */
   async incrementalReview(
     prId: string | number,
-    options: IncrementalReviewOptions = {}
+    options: IncrementalReviewOptions = {},
+    graphContext?: GraphReviewContext
   ): Promise<ReviewResult> {
     // Reset checkpoint flag for new review
     this.checkpointHandled = false;
@@ -140,7 +144,7 @@ export class PRReviewAgent {
 
     if (options.forceFull || !checkResult.isIncremental || !checkResult.checkpoint) {
       console.log(`📋 Full review mode: ${checkResult.reason || 'forced'}`);
-      return this.review(prId);
+      return this.review(prId, graphContext);
     }
 
     const github = this.vcs as GitHubAdapter;
@@ -207,11 +211,20 @@ export class PRReviewAgent {
       files: relevantFiles,
       tickets,
       skills: applicableSkills,
-      config: this.config.review
+      config: this.config.review,
+      graphContext,
     };
 
     // Run review
     const result = await this.llm.generateReview(context);
+
+    // Precision filter
+    const threshold = this.config.review?.precisionThreshold ?? 0.7;
+    const { kept, filtered } = filterByConfidence(result.comments, { minConfidence: threshold });
+    if (filtered.length > 0) {
+      console.log(`🎯 Precision filter: ${kept.length}/${result.comments.length} comments kept (threshold ${threshold})`);
+    }
+    result.comments = kept.length > 0 ? kept : result.comments.filter(c => c.confidence === undefined);
 
     // Add checkpoint marker to summary
     result.summary = `[Incremental Review: ${incrementalResult.diff.files.length} new files]\n\n${result.summary}`;
@@ -312,6 +325,14 @@ export class PRReviewAgent {
 
     // 5. Run review
     const result = await this.llm.generateReview(context);
+
+    // 6. Precision filter — drop low-confidence comments
+    const threshold = this.config.review?.precisionThreshold ?? 0.7;
+    const { kept, filtered } = filterByConfidence(result.comments, { minConfidence: threshold });
+    if (filtered.length > 0) {
+      console.log(`🎯 Precision filter: ${kept.length}/${result.comments.length} comments kept (threshold ${threshold})`);
+    }
+    result.comments = kept.length > 0 ? kept : result.comments.filter(c => c.confidence === undefined);
 
     // Cache diff for use in postReview path validation
     this.lastDiff = diff;

@@ -16,7 +16,7 @@
   },
   "types": "dist/index.d.ts",
   "scripts": {
-    "build": "tsup && tsc --declaration --emitDeclarationOnly --noEmit false",
+    "build": "tsup && tsc --build --force",
     "dev": "ts-node src/cli.ts",
     "test": "jest",
     "lint": "eslint src/**/*.ts"

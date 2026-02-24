@@ -118,6 +118,22 @@ If you propose a fix, implement it and please make it concise.
 
 VERDICT: approve|request_changes|comment
 
+## Confidence Scoring (REQUIRED)
+For EACH comment, include a self-assessed confidence score at the end of the comment body.
+
+Format: add [Confidence: X.X] at the end of the comment body, where X.X is a decimal from 0.0 to 1.0.
+
+Scoring guide:
+- 0.9-1.0: Definite bug, security issue, or clear correctness problem
+- 0.7-0.9: Likely issue with clear impact
+- 0.5-0.7: Potential issue, may be stylistic
+- 0.0-0.5: Speculative — omit these entirely unless critical
+
+Example:
+[File: /src/auth.ts, Line: 42]
+**Suggestion:** The token is not validated before use.
+[Confidence: 0.92]
+
 RULES:
 - The [File:, Line:] marker must use the EXACT path from the diff (including any leading slash)
 - The line number is the ABSOLUTE file line number shown after \`+\` in the diff — use the \`@@ -old +NEW @@\` header as the base and count from there. Do NOT count from line 1.
