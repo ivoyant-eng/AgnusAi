@@ -14,8 +14,9 @@ interface GraphReviewContext {
   callers: ParsedSymbol[]             // BFS inbound (1 or 2 hops)
   callees: ParsedSymbol[]             // BFS outbound (1 hop)
   blastRadius: BlastRadius            // score + affected files
-  semanticNeighbors: ParsedSymbol[]   // top-K by embedding similarity (deep mode)
+  semanticNeighbors: ParsedSymbol[]   // top-K re-ranked by embedding + graph distance (deep mode)
   priorExamples?: string[]            // top-5 accepted comments from past reviews (RAG)
+  rejectedExamples?: string[]         // top-3 rejected comments from past reviews (negative RAG)
 }
 ```
 
@@ -42,9 +43,9 @@ Results are deduplicated across all changed symbols.
 - `fast` → 1
 - `standard` / `deep` → 2
 
-### 4. Semantic Search (deep mode only)
+### 4. Semantic Search + Graph-Distance Re-ranking (deep mode only)
 
-The signatures of changed symbols are embedded and searched against `symbol_embeddings`:
+The signatures of changed symbols are averaged into a single query vector and searched against `symbol_embeddings`:
 
 ```sql
 SELECT symbol_id, 1 - (embedding <=> $1::vector) AS score
@@ -54,7 +55,15 @@ ORDER BY embedding <=> $1::vector
 LIMIT 10
 ```
 
-The top 10 results are fetched from the graph and added as `semanticNeighbors`. Results that already appear in the graph traversal are deduplicated.
+Results are then **re-ranked** by combining embedding similarity with inverse graph distance:
+
+```
+combinedScore = embeddingSimilarity × (1 / (graphDistance + 1))
+```
+
+`graphDistance` is the minimum hop count from any changed symbol (callers + callees BFS), capped at 3 if no structural connection exists within 2 hops. This means a direct callee with high similarity scores identically to a 4-hop neighbour with high similarity — the structurally closer symbol ranks higher.
+
+Results already in the caller/callee sets are deduplicated before re-ranking.
 
 ### 5. Blast Radius
 
@@ -84,10 +93,12 @@ ORDER BY rc.embedding <-> $2   -- pgvector cosine distance
 LIMIT 5
 ```
 
-The top-5 results are cleaned (UI feedback links stripped) and injected into the prompt as a visible `## Examples of feedback your team found helpful` section. The LLM uses these as style guidance — matching the depth, tone, and focus areas that the team has already endorsed.
+The top-5 accepted results are cleaned (UI feedback links stripped) and injected into the prompt as a `## Examples of feedback your team found helpful` section. The LLM uses these as style guidance — matching the depth, tone, and focus areas that the team has already endorsed.
+
+In the same embedding call, the top-3 **rejected** comments (marked 👎 by developers) are also retrieved and injected as a separate `## Examples of feedback this team found NOT helpful` section. This negative signal steers the LLM away from comment patterns the team has explicitly dismissed.
 
 ::: tip Graceful degradation
-If `EMBEDDING_PROVIDER` is not set, or no accepted comments exist yet, this step is silently skipped. Reviews work normally without it.
+If `EMBEDDING_PROVIDER` is not set, or no rated comments exist yet, both steps are silently skipped. Reviews work normally without them.
 :::
 
 ## Prompt Serialization
