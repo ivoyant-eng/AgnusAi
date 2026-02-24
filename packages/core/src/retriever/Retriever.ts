@@ -71,13 +71,22 @@ export class Retriever {
       const queryVector = averageVectors(embeddings)
       const results = await this.embeddings.search(queryVector, repoId, topK)
 
-      // Filter out symbols already in caller/callee sets
+      // Re-rank: combine embedding similarity with inverse graph distance
+      // score from search is already cosine similarity (higher = more similar)
       const knownIds = new Set([...changedIds, ...callerMap.keys(), ...calleeMap.keys()])
-      for (const r of results) {
-        if (!knownIds.has(r.id)) {
-          const sym = this.graph.getSymbol(r.id)
-          if (sym) semanticNeighbors.push(sym)
-        }
+      const ranked = results
+        .filter(r => !knownIds.has(r.id))
+        .map(r => {
+          const graphDist = computeMinGraphDistance(r.id, changedIds, this.graph)
+          const combinedScore = r.score * (1 / (graphDist + 1))
+          return { id: r.id, combinedScore }
+        })
+        .sort((a, b) => b.combinedScore - a.combinedScore)
+        .slice(0, topK)
+
+      for (const { id } of ranked) {
+        const sym = this.graph.getSymbol(id)
+        if (sym) semanticNeighbors.push(sym)
       }
     }
 
@@ -113,6 +122,29 @@ function extractChangedFiles(diff: string): Set<string> {
     }
   }
   return files
+}
+
+/**
+ * BFS from each changed symbol (callers + callees) to find the minimum graph
+ * distance from `symbolId` to any changed symbol. Returns 1, 2, or 3 (capped).
+ */
+function computeMinGraphDistance(
+  symbolId: string,
+  changedIds: Set<string>,
+  graph: InMemorySymbolGraph,
+  maxHops = 2,
+): number {
+  for (const changedId of changedIds) {
+    // Distance 1: direct caller or callee of a changed symbol
+    const hop1 = [...graph.getCallers(changedId, 1), ...graph.getCallees(changedId, 1)]
+    if (hop1.some(s => s.id === symbolId)) return 1
+    // Distance 2: within 2-hop BFS (getCallers/getCallees return all within N hops)
+    if (maxHops >= 2) {
+      const hop2 = [...graph.getCallers(changedId, 2), ...graph.getCallees(changedId, 2)]
+      if (hop2.some(s => s.id === symbolId)) return 2
+    }
+  }
+  return maxHops + 1 // structurally distant
 }
 
 function averageVectors(vecs: number[][]): number[] {
