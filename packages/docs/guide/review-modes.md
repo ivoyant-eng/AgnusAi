@@ -66,6 +66,44 @@ This closes the learning loop: every 👍 rating improves future reviews on that
 Prior examples are silently skipped on the first reviews. The system starts learning as soon as one accepted comment exists.
 :::
 
+## Precision Filter
+
+The LLM is required to self-assess a confidence score for every comment it generates. Scores are extracted from the response and low-confidence comments are automatically dropped before posting.
+
+### How it works
+
+The LLM appends `[Confidence: X.X]` to each comment body. The reviewer parser extracts the score and strips it from the displayed comment. Any comment below the threshold (default `0.7`) is silently filtered out.
+
+```
+LLM output:          The token is not validated before use. [Confidence: 0.92]
+Displayed comment:   The token is not validated before use.
+Filtered out:        This could potentially be improved. [Confidence: 0.45]
+```
+
+### Scoring guide
+
+| Range | Meaning |
+|-------|---------|
+| 0.9–1.0 | Definite bug, security issue, or clear correctness problem |
+| 0.7–0.9 | Likely issue with clear impact |
+| 0.5–0.7 | Potential issue, may be stylistic |
+| 0.0–0.5 | Speculative — model is told to omit these entirely |
+
+### Configuration
+
+Set `PRECISION_THRESHOLD` in `.env` to adjust the cutoff:
+
+```env
+PRECISION_THRESHOLD=0.8   # stricter — only post very confident findings
+PRECISION_THRESHOLD=0.5   # looser — include more potential issues
+```
+
+Default is `0.7`. Applied in both full reviews and incremental reviews.
+
+::: tip Comments without a confidence score
+If a comment does not include `[Confidence: X.X]` (e.g. from an older model or skill), it is kept regardless of threshold — backward compatible.
+:::
+
 ## What the LLM Sees
 
 In all modes, the prompt includes a `## Codebase Context` section when graph context is available:

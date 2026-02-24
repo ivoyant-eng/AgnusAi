@@ -48,6 +48,8 @@ All configuration is through environment variables. Copy `.env.example` to `.env
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REVIEW_DEPTH` | `standard` | `fast` — 1-hop graph, no embeddings. `standard` — 2-hop graph, no embeddings. `deep` — 2-hop + semantic neighbors via embedding search. |
+| `PRECISION_THRESHOLD` | `0.7` | Minimum LLM confidence score (0.0–1.0) required to post a comment. Comments with `[Confidence: X.X]` below this threshold are silently dropped. |
+| `MAX_DIFF_SIZE` | `150000` | Maximum number of characters of diff to send to the LLM. Increase for large PRs with many files. |
 
 ## Server
 
@@ -96,6 +98,8 @@ EMBEDDING_MODEL=qwen3-embedding:0.6b
 
 # Review depth
 REVIEW_DEPTH=standard
+PRECISION_THRESHOLD=0.7
+MAX_DIFF_SIZE=150000
 
 # VCS
 GITHUB_TOKEN=ghp_...

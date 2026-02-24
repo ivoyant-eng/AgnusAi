@@ -184,16 +184,42 @@ Re-trigger a full index for an already-registered repo. Resets `indexed_at` so t
 
 ### `POST /api/repos/:id/review` _(auth required)_
 
-Manually trigger a review for a specific PR. Runs synchronously — response is returned when the review is complete and posted.
+Manually trigger a review for a specific PR. Runs synchronously — response is returned when the review is complete.
 
 **Request body:**
+
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `prNumber` | Yes | — | PR number to review |
+| `baseBranch` | No | `"main"` | Base branch for context |
+| `dryRun` | No | `false` | If `true`, runs the full pipeline (graph context, RAG, precision filter) but does **not** post comments or persist to DB. Returns `comments[]` in the response. |
+
+**Live review (default):**
 ```json
 {"prNumber": 42, "baseBranch": "main"}
 ```
-
-**Response:**
+Response:
 ```json
 {"verdict": "request_changes", "commentCount": 5, "prNumber": 42, "repoId": "aHR0cHM6..."}
+```
+
+**Dry run — inspect without posting:**
+```json
+{"prNumber": 42, "dryRun": true}
+```
+Response:
+```json
+{
+  "verdict": "request_changes",
+  "commentCount": 5,
+  "prNumber": 42,
+  "repoId": "aHR0cHM6...",
+  "dryRun": true,
+  "comments": [
+    {"path": "/src/auth.ts", "line": 42, "severity": "warning", "confidence": 0.85, "body": "..."},
+    {"path": "/src/db.ts", "line": 17, "severity": "error", "confidence": 0.92, "body": "..."}
+  ]
+}
 ```
 
 | Verdict | Meaning |

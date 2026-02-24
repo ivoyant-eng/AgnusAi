@@ -46,3 +46,24 @@ node dist/cli.js review --pr 42 --repo owner/repo
 ## Webhook Behavior
 
 The hosted service always reviews incrementally. When a `pull_request.synchronize` event arrives, only the diff since the last reviewed commit is sent to the LLM.
+
+## Azure DevOps — Iteration-based Incremental
+
+Azure DevOps uses a different mechanism. Instead of checkpoint comments, it uses PR **iterations**: each push to a PR branch creates a new numbered iteration.
+
+### How it works
+
+| Event | Diff strategy |
+|-------|--------------|
+| `git.pullrequest.created` | Full diff (`$compareTo=0` — all iterations) |
+| `git.pullrequest.updated` | Incremental diff (`$compareTo=latest.id - 1` — only new commits) |
+
+When a PR is updated (new commits pushed), the webhook fires with `git.pullrequest.updated`. AgnusAI automatically diffs only the latest iteration against the previous one, so the LLM only reviews the new changes.
+
+### Base commit
+
+The base commit for Azure diffs is taken from `iterations[0].commonRefCommit` (the merge base when the PR was first created). This stays stable across pushes, ensuring consistent blame and line numbers.
+
+### Manual trigger
+
+The `/api/repos/:id/review` endpoint always does a full cumulative diff regardless of platform. Use it to re-review an entire PR from scratch.

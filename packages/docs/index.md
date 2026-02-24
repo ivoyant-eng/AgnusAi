@@ -32,6 +32,9 @@ features:
   - icon: 🌐
     title: Multi-language Parsers
     details: TypeScript, JavaScript, Python, Java, Go, C# — all parsed with Tree-sitter WASM. No language server required.
+  - icon: 🎯
+    title: Precision Filter
+    details: The LLM self-scores every comment with [Confidence X.X]. Anything below the threshold (default 0.7) is silently dropped — only high-signal findings reach your PR. Configurable via PRECISION_THRESHOLD.
   - icon: 👍
     title: Feedback Learning Loop
     details: Developers rate comments with 👍/👎 links in GitHub. Accepted comments are embedded and retrieved as team-specific examples on the next review — the model gets better with every rating.
