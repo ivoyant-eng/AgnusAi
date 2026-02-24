@@ -4,19 +4,6 @@ import type { Pool } from 'pg'
 import { getOrLoadRepo } from '../graph-cache'
 import { runReview } from '../review-runner'
 
-async function saveReview(
-  pool: Pool,
-  repoId: string,
-  prNumber: number,
-  verdict: string,
-  commentCount: number,
-): Promise<void> {
-  await pool.query(
-    `INSERT INTO reviews (id, repo_id, pr_number, verdict, comment_count) VALUES ($1,$2,$3,$4,$5)`,
-    [crypto.randomUUID(), repoId, prNumber, verdict, commentCount],
-  )
-}
-
 export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   const pool: Pool = app.db
   const webhookSecret = process.env.WEBHOOK_SECRET ?? ''
@@ -78,15 +65,15 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
 
         setImmediate(async () => {
           try {
-            const { verdict, commentCount } = await runReview({
+            await runReview({
               platform: 'github',
               repoId,
               repoUrl,
               prNumber,
               baseBranch,
               token: await getRepoToken(pool, repoId),
+              pool,
             })
-            await saveReview(pool, repoId, prNumber, verdict, commentCount)
           } catch (err) {
             console.error('[webhook] Review failed for PR', prNumber, (err as Error).message)
           }
@@ -150,15 +137,15 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
 
       setImmediate(async () => {
         try {
-          const { verdict, commentCount } = await runReview({
+          await runReview({
             platform: 'azure',
             repoId,
             repoUrl,
             prNumber: prId,
             baseBranch,
             token: await getRepoToken(pool, repoId),
+            pool,
           })
-          await saveReview(pool, repoId, prId, verdict, commentCount)
         } catch (err) {
           console.error('[webhook:azure] Review failed for PR', prId, (err as Error).message)
         }

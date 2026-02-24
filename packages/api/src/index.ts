@@ -7,6 +7,7 @@ import { Pool } from 'pg'
 import { webhookRoutes } from './routes/webhooks'
 import { repoRoutes } from './routes/repos'
 import { authRoutes } from './routes/auth'
+import { feedbackRoutes } from './routes/feedback'
 import { initGraphCache, warmupAllRepos } from './graph-cache'
 import { seedAdminUser } from './auth/seed'
 import { requireAuth } from './auth/middleware'
@@ -54,6 +55,7 @@ async function buildServer() {
   await app.register(authRoutes)
   await app.register(webhookRoutes)
   await app.register(repoRoutes)
+  await app.register(feedbackRoutes)
 
   // GET /api/reviews — return last 50 reviews (auth required)
   app.get('/api/reviews', { preHandler: [requireAuth] }, async (_req, reply) => {
@@ -205,11 +207,37 @@ async function main() {
     )
   `)
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS review_comments (
+      id          TEXT PRIMARY KEY,
+      review_id   TEXT REFERENCES reviews(id) ON DELETE CASCADE,
+      repo_id     TEXT NOT NULL,
+      pr_number   INT  NOT NULL,
+      path        TEXT,
+      line        INT,
+      body        TEXT,
+      severity    TEXT,
+      created_at  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS review_feedback (
+      id          TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+      comment_id  TEXT NOT NULL REFERENCES review_comments(id) ON DELETE CASCADE,
+      signal      TEXT NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(comment_id)
+    )
+  `)
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS user_settings (
       user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       review_depth TEXT NOT NULL DEFAULT 'standard'
     )
   `)
+  const commentEmbDim = embeddingForMigration?.dim ?? 1536
+  await pool.query(
+    `ALTER TABLE review_comments ADD COLUMN IF NOT EXISTS embedding vector(${commentEmbDim})`
+  )
   await pool.query(`
     CREATE TABLE IF NOT EXISTS system_api_keys (
       id INT PRIMARY KEY DEFAULT 1,
