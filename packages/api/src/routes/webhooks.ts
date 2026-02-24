@@ -62,6 +62,8 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       if (action === 'opened' || action === 'synchronize') {
         const prNumber = (payload.pull_request as any)?.number as number
         const baseBranch = ((payload.pull_request as any)?.base?.ref as string) ?? 'main'
+        // On re-push, use checkpoint-based incremental review (only new commits)
+        const incrementalReview = action === 'synchronize'
 
         setImmediate(async () => {
           try {
@@ -73,6 +75,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
               baseBranch,
               token: await getRepoToken(pool, repoId),
               pool,
+              incrementalReview,
             })
           } catch (err) {
             console.error('[webhook] Review failed for PR', prNumber, (err as Error).message)
@@ -134,6 +137,8 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       const prId = (payload.resource as any)?.pullRequestId as number
       const targetRef = ((payload.resource as any)?.targetRefName as string) ?? 'refs/heads/main'
       const baseBranch = targetRef.replace('refs/heads/', '') || 'main'
+      // On re-push, only diff the new commits (latest vs previous iteration)
+      const incrementalDiff = eventType === 'git.pullrequest.updated'
 
       setImmediate(async () => {
         try {
@@ -145,6 +150,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
             baseBranch,
             token: await getRepoToken(pool, repoId),
             pool,
+            incrementalDiff,
           })
         } catch (err) {
           console.error('[webhook:azure] Review failed for PR', prId, (err as Error).message)
