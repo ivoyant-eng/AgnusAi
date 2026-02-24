@@ -358,8 +358,8 @@
     padding: 56px 32px 64px;
     display: grid;
     grid-template-columns: 1.1fr 1fr;
-    gap: 48px;
-    align-items: start;
+    gap: 60px;
+    align-items: center;
   }
   .hero h1 {
     font-family: sans-serif;

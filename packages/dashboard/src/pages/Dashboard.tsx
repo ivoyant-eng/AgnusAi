@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import useSWR from 'swr'
 import { Link, useNavigate } from 'react-router-dom'
 import { Trash2, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { FeedbackChart } from '@/components/FeedbackChart'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface Repo {
   repoId: string
@@ -39,10 +41,31 @@ const VERDICT_COLOR: Record<string, string> = {
   comment: 'text-muted-foreground',
 }
 
+interface FeedbackMetrics {
+  repoId: string
+  series: Array<{ date: string; accepted: number; rejected: number }>
+  totals: { accepted: number; rejected: number; total: number; acceptanceRate: number | null }
+}
+
 export default function Dashboard() {
   const { data: repos, mutate: mutateRepos } = useSWR<Repo[]>('/api/repos', fetcher, { refreshInterval: 30000 })
   const { data: reviews } = useSWR<Review[]>('/api/reviews', fetcher, { refreshInterval: 30000 })
   const navigate = useNavigate()
+
+  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
+
+  // Default to first repo once repos load
+  useEffect(() => {
+    if (repos && repos.length > 0 && !selectedRepoId) {
+      setSelectedRepoId(repos[0].repoId)
+    }
+  }, [repos, selectedRepoId])
+
+  const { data: metrics } = useSWR<FeedbackMetrics>(
+    selectedRepoId ? `/api/repos/${selectedRepoId}/feedback-metrics` : null,
+    fetcher,
+    { refreshInterval: 60000 },
+  )
 
   const hasData = repos && repos.length > 0
 
@@ -123,6 +146,38 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
+          </section>
+
+          {/* Learning Metrics section */}
+          <section>
+            <div className="flex items-center justify-between mb-6">
+              <p className="label-meta">Learning Metrics</p>
+              {repos && repos.length > 1 && (
+                <Select value={selectedRepoId ?? ''} onValueChange={setSelectedRepoId}>
+                  <SelectTrigger className="w-56 h-8 text-xs overflow-hidden">
+                    <span className="truncate min-w-0 flex-1 text-left">
+                      <SelectValue placeholder="Select repo" />
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {repos.map(r => (
+                      <SelectItem key={r.repoId} value={r.repoId}>
+                        <span className="block truncate max-w-[240px]">
+                          {r.repoUrl.replace('https://github.com/', '').replace('https://dev.azure.com/', '')}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
+            {metrics ? (
+              <FeedbackChart series={metrics.series} totals={metrics.totals} />
+            ) : (
+              <div className="border border-border py-12 text-center">
+                <p className="label-meta text-muted-foreground">Loading…</p>
+              </div>
+            )}
           </section>
 
           {/* Reviews table */}
