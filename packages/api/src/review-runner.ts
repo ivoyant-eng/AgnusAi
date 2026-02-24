@@ -22,9 +22,15 @@ export interface ReviewRunOptions {
   token?: string
   baseBranch: string
   pool: Pool
+  /** Azure only: if true, diffs only the new commits since the previous push (webhook re-push mode) */
+  incrementalDiff?: boolean
+  /** GitHub only: if true, uses checkpoint-based incremental review (only new commits since last review) */
+  incrementalReview?: boolean
+  /** If true, skips posting comments and DB inserts — returns comments in the response for inspection */
+  dryRun?: boolean
 }
 
-export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string }> {
+export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; comments?: any[] }> {
   const { platform, repoId, repoUrl, prNumber, token, baseBranch, pool } = opts
 
   // Build VCS adapter
@@ -45,7 +51,9 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     const organization = parts[0] ?? ''
     const project = parts[1] ?? ''
     const repository = parts[parts.length - 1] ?? ''
-    vcs = new AzureDevOpsAdapter({ organization, project, repository, token })
+    const azureAdapter = new AzureDevOpsAdapter({ organization, project, repository, token })
+    if (opts.incrementalDiff) azureAdapter.incrementalFromPreviousIteration = true
+    vcs = azureAdapter
   }
 
   const config: Config = {
@@ -59,9 +67,10 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
       },
     },
     review: {
-      maxDiffSize: 50000,
+      maxDiffSize: process.env.MAX_DIFF_SIZE ? parseInt(process.env.MAX_DIFF_SIZE) : 150000,
       focusAreas: [],
       ignorePaths: ['node_modules', 'dist', 'build', '.git'],
+      precisionThreshold: process.env.PRECISION_THRESHOLD ? parseFloat(process.env.PRECISION_THRESHOLD) : 0.7,
     },
     skills: {
       path: SKILLS_PATH,
@@ -132,7 +141,9 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     }
   }
 
-  const result = await agent.review(prNumber, graphContext)
+  const result = opts.incrementalReview && platform === 'github'
+    ? await agent.incrementalReview(prNumber, {}, graphContext)
+    : await agent.review(prNumber, graphContext)
 
   // Generate a stable reviewId upfront so review_comments can FK into reviews
   const reviewId = crypto.randomUUID()
@@ -175,6 +186,22 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
         body: comment.body,
         severity: comment.severity ?? 'info',
       })
+    }
+  }
+
+  // Dry-run: skip DB writes and posting — return comments for inspection
+  if (opts.dryRun) {
+    return {
+      verdict: (result as any).verdict ?? 'unknown',
+      commentCount: comments.length,
+      reviewId,
+      comments: comments.map((c: any) => ({
+        path: c.path,
+        line: c.line,
+        severity: c.severity,
+        confidence: c.confidence,
+        body: c.body,
+      })),
     }
   }
 

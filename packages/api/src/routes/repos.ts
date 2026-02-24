@@ -209,7 +209,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
    */
   app.post('/api/repos/:id/review', { preHandler: [requireAuth] }, async (req, reply) => {
     const { id: repoId } = req.params as { id: string }
-    const { prNumber, baseBranch = 'main' } = req.body as { prNumber: number; baseBranch?: string }
+    const { prNumber, baseBranch = 'main', dryRun = false } = req.body as { prNumber: number; baseBranch?: string; dryRun?: boolean }
 
     if (!prNumber) {
       return reply.status(400).send({ error: 'prNumber is required' })
@@ -227,7 +227,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     // Run review synchronously so the caller gets the result
     try {
-      const { verdict, commentCount } = await runReview({
+      const result = await runReview({
         platform,
         repoId,
         repoUrl,
@@ -235,9 +235,11 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
         baseBranch,
         token: token ?? undefined,
         pool,
+        dryRun,
       })
 
-      return reply.send({ verdict, commentCount, prNumber, repoId })
+      const { verdict, commentCount, comments } = result
+      return reply.send({ verdict, commentCount, prNumber, repoId, ...(dryRun ? { dryRun: true, comments } : {}) })
     } catch (err) {
       const msg = (err as Error).message
       console.error(`[repos] Manual review failed for PR ${prNumber}:`, msg)
