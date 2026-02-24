@@ -32,6 +32,9 @@ features:
   - icon: 🌐
     title: Multi-language Parsers
     details: TypeScript, JavaScript, Python, Java, Go, C# — all parsed with Tree-sitter WASM. No language server required.
+  - icon: 👍
+    title: Feedback Learning Loop
+    details: Developers rate comments with 👍/👎 links in GitHub. Accepted comments are embedded and retrieved as team-specific examples on the next review — the model gets better with every rating.
   - icon: 🐳
     title: Self-hostable
     details: One docker compose up. Postgres + pgvector + Ollama included. No cloud dependency.

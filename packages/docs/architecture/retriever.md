@@ -1,6 +1,6 @@
 # Retriever & RAG
 
-The `Retriever` assembles a `GraphReviewContext` from a PR diff. It combines graph traversal and (in deep mode) vector search to give the LLM the richest possible context.
+The `Retriever` assembles a `GraphReviewContext` from a PR diff. It combines graph traversal, (in deep mode) vector search, and prior feedback examples to give the LLM the richest possible context.
 
 ## Input / Output
 
@@ -15,6 +15,7 @@ interface GraphReviewContext {
   callees: ParsedSymbol[]             // BFS outbound (1 hop)
   blastRadius: BlastRadius            // score + affected files
   semanticNeighbors: ParsedSymbol[]   // top-K by embedding similarity (deep mode)
+  priorExamples?: string[]            // top-5 accepted comments from past reviews (RAG)
 }
 ```
 
@@ -62,6 +63,32 @@ The top 10 results are fetched from the graph and added as `semanticNeighbors`. 
 - All transitive callers
 - Deduplicated affected file list
 - Risk score (0–100)
+
+### 6. Prior Examples (feedback RAG)
+
+This step runs in `review-runner`, not inside `Retriever` itself, but produces the `priorExamples` field on `GraphReviewContext`.
+
+The first 8,000 characters of the diff are embedded and compared against all `review_comments` that:
+- Belong to the same `repo_id`
+- Have been marked `accepted` in `review_feedback`
+- Have a stored embedding vector
+
+```sql
+SELECT rc.body, rc.path
+FROM review_comments rc
+JOIN review_feedback rf ON rf.comment_id = rc.id
+WHERE rc.repo_id = $1
+  AND rf.signal = 'accepted'
+  AND rc.embedding IS NOT NULL
+ORDER BY rc.embedding <-> $2   -- pgvector cosine distance
+LIMIT 5
+```
+
+The top-5 results are cleaned (UI feedback links stripped) and injected into the prompt as a visible `## Examples of feedback your team found helpful` section. The LLM uses these as style guidance — matching the depth, tone, and focus areas that the team has already endorsed.
+
+::: tip Graceful degradation
+If `EMBEDDING_PROVIDER` is not set, or no accepted comments exist yet, this step is silently skipped. Reviews work normally without it.
+:::
 
 ## Prompt Serialization
 

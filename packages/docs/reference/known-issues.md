@@ -106,6 +106,18 @@ This page tracks all identified blindspots — root causes of false positives (h
 
 ---
 
+### I — Feedback links and comment persistence silently skipped ✅
+
+**Symptom:** Review comments posted to GitHub had no 👍/👎 links. No `review_comments` rows were written to the database. The `GET /api/feedback` endpoint returned `Invalid token.` for valid-looking URLs.
+
+**Root cause:** `docker-compose.yml` passes `FEEDBACK_SECRET=` (empty string) as the default. The fallback chain in both `review-runner.ts` and `feedback.ts` used `??` (nullish coalescing), which treats `''` as a defined value and short-circuits — never reaching `WEBHOOK_SECRET`. The result: `feedbackSecret` was `''` (falsy), so `if (baseUrl && feedbackSecret)` was always false (no links, no DB rows). The token verification in `feedback.ts` also used `''` — so even manually constructed URLs were rejected.
+
+**Fix:** Changed `??` to `||` in both files so empty strings fall through to `WEBHOOK_SECRET` / `SESSION_SECRET`.
+
+**Files:** `packages/api/src/review-runner.ts`, `packages/api/src/routes/feedback.ts`
+
+---
+
 ## Open Gaps
 
 ### LLM Knowledge Cutoff — Package Versions

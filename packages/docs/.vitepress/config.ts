@@ -81,6 +81,7 @@ export default defineConfig({
           { text: 'Smart Deduplication', link: '/reference/deduplication' },
           { text: 'Skills System', link: '/reference/skills' },
           { text: 'Comment Threads', link: '/reference/comment-threads' },
+          { text: 'Feedback & Learning Loop', link: '/guide/hosted-setup#feedback-learning-loop' },
           { text: 'Known Issues & Blindspots', link: '/reference/known-issues' },
         ],
       },

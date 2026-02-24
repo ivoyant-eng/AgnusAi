@@ -20,6 +20,8 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
       REVIEW_DEPTH: ${REVIEW_DEPTH:-standard}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      BASE_URL: ${BASE_URL:-http://localhost:3000}
+      FEEDBACK_SECRET: ${FEEDBACK_SECRET:-}
     volumes:
       - /tmp:/tmp:ro
       - repos-data:/repos

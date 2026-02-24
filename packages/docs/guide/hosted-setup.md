@@ -102,6 +102,33 @@ curl -b /tmp/agnus.txt -X POST http://localhost:3000/api/auth/invite \
 
 Share the URL. The recipient opens it, chooses a password, and gets `member` access.
 
+## Feedback Learning Loop
+
+Each review comment posted to GitHub/Azure contains 👍/👎 links at the bottom:
+
+```
+Was this helpful? 👍 Yes · 👎 No
+```
+
+When a developer clicks one:
+
+1. The API validates an HMAC-signed token and records the signal in `review_feedback`
+2. On the next PR review for the same repo, the diff is embedded and the top-5 accepted comments are retrieved via pgvector similarity search
+3. Those examples are injected into the LLM prompt — teaching it the style and depth that your team finds valuable
+
+To enable feedback links you need two env vars:
+
+```env
+BASE_URL=https://your-server.com   # public URL so links resolve from GitHub
+FEEDBACK_SECRET=any-random-string  # signs the HMAC tokens (falls back to WEBHOOK_SECRET)
+```
+
+View per-repo acceptance rates on the **Dashboard → Learning Metrics** chart (requires at least one rating).
+
+::: warning Feedback links require BASE_URL
+If `BASE_URL` is unset, feedback links are silently omitted from review comments. Reviews still work — you just won't collect ratings.
+:::
+
 ## Environment Variables
 
 See [Environment Variables →](./env-vars) for the full reference.

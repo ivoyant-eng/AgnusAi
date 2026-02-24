@@ -42,6 +42,30 @@ In addition to the 2-hop graph context, the Retriever embeds the changed symbols
 If `REVIEW_DEPTH=deep` but `EMBEDDING_PROVIDER` is not set, the reviewer falls back to 2-hop graph only (same as standard).
 :::
 
+## Prior Examples (Feedback Learning Loop)
+
+Across all modes, if `EMBEDDING_PROVIDER` is configured and developers have previously rated comments with 👍, the top-5 most relevant accepted comments from past reviews on the same repo are injected into the prompt:
+
+```
+## Examples of feedback your team found helpful
+These are past review comments on this repo that developers marked as useful.
+Use them as a guide for the style and depth of feedback that resonates with this team.
+
+---
+[src/auth/service.ts]
+**Suggestion:** The token refresh logic races with concurrent requests — ...
+
+---
+[src/db/client.ts]
+**Suggestion:** Connection pool size is not bounded here ...
+```
+
+This closes the learning loop: every 👍 rating improves future reviews on that repo. The more ratings collected, the more team-specific the review style becomes. Comments are scoped per `repo_id` so cross-repo contamination is not possible.
+
+::: tip No ratings yet?
+Prior examples are silently skipped on the first reviews. The system starts learning as soon as one accepted comment exists.
+:::
+
 ## What the LLM Sees
 
 In all modes, the prompt includes a `## Codebase Context` section when graph context is available:
