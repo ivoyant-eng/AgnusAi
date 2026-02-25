@@ -19,6 +19,12 @@ export function buildReviewPrompt(context: ReviewContext): string {
       graphContext.priorExamples.map(e => `---\n${e}`).join('\n\n') + '\n'
     : ''
 
+  const rejectedSection = (graphContext?.rejectedExamples?.length)
+    ? `\n## Examples of feedback this team found NOT helpful\n` +
+      `Avoid writing comments similar to these — developers on this repo have explicitly marked them as unhelpful.\n\n` +
+      graphContext.rejectedExamples.map(e => `---\n${e}`).join('\n\n') + '\n'
+    : ''
+
   const fileList = diff.files
     .map(f => `- ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`)
     .join('\n');
@@ -45,7 +51,7 @@ ${fileList}
 
 ## Diff
 ${diffResult.content}
-${graphSection}${skillContext}${examplesSection}
+${graphSection}${skillContext}${examplesSection}${rejectedSection}
 ${truncationWarning}
 
 ## Review Instructions

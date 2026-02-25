@@ -36,7 +36,7 @@ REVIEW_DEPTH=deep
 **Embeddings:** Required — `EMBEDDING_PROVIDER` must be set
 **Best for:** High-risk PRs, architectural changes, utility function refactors
 
-In addition to the 2-hop graph context, the Retriever embeds the changed symbols' signatures and searches the vector store for the top 10 semantically similar symbols. These **semantic neighbors** are injected into the prompt even if they have no graph edge to the changed code — useful for finding similar patterns, naming conventions, and potential duplicate implementations.
+In addition to the 2-hop graph context, the Retriever embeds the changed symbols' signatures and searches the vector store for the top 10 semantically similar symbols. Results are **re-ranked** by combining embedding similarity with inverse graph distance — symbols structurally closer to the changed code rank higher even if a slightly more distant symbol has a marginally better embedding match. These **semantic neighbors** are injected into the prompt even if they have no graph edge to the changed code — useful for finding similar patterns, naming conventions, and potential duplicate implementations.
 
 ::: warning Deep mode requires embeddings
 If `REVIEW_DEPTH=deep` but `EMBEDDING_PROVIDER` is not set, the reviewer falls back to 2-hop graph only (same as standard).
@@ -44,26 +44,28 @@ If `REVIEW_DEPTH=deep` but `EMBEDDING_PROVIDER` is not set, the reviewer falls b
 
 ## Prior Examples (Feedback Learning Loop)
 
-Across all modes, if `EMBEDDING_PROVIDER` is configured and developers have previously rated comments with 👍, the top-5 most relevant accepted comments from past reviews on the same repo are injected into the prompt:
+Across all modes, if `EMBEDDING_PROVIDER` is configured and developers have previously rated comments, two sets of examples are retrieved in a single embedding call and injected into the prompt:
+
+**Positive examples** — top-5 accepted (👍) comments, injected as `## Examples of feedback your team found helpful`. The LLM uses these as style guidance, matching the depth and focus areas the team has endorsed.
+
+**Negative examples** — top-3 rejected (👎) comments, injected as `## Examples of feedback this team found NOT helpful`. The LLM is explicitly told to avoid comment patterns the team has dismissed.
 
 ```
 ## Examples of feedback your team found helpful
-These are past review comments on this repo that developers marked as useful.
-Use them as a guide for the style and depth of feedback that resonates with this team.
+...
+
+## Examples of feedback this team found NOT helpful
+Avoid writing comments similar to these — developers on this repo have explicitly marked them as unhelpful.
 
 ---
-[src/auth/service.ts]
-**Suggestion:** The token refresh logic races with concurrent requests — ...
-
----
-[src/db/client.ts]
-**Suggestion:** Connection pool size is not bounded here ...
+[src/utils/helpers.ts]
+**Suggestion:** Consider renaming this variable for clarity. [Confidence: 0.51]
 ```
 
-This closes the learning loop: every 👍 rating improves future reviews on that repo. The more ratings collected, the more team-specific the review style becomes. Comments are scoped per `repo_id` so cross-repo contamination is not possible.
+Every 👍/👎 rating strengthens the learning loop. Comments are scoped per `repo_id` so cross-repo contamination is not possible.
 
 ::: tip No ratings yet?
-Prior examples are silently skipped on the first reviews. The system starts learning as soon as one accepted comment exists.
+Both example sections are silently skipped on the first reviews. The system starts learning as soon as one rated comment exists.
 :::
 
 ## Precision Filter

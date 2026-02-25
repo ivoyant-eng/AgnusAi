@@ -47,6 +47,13 @@ interface FeedbackMetrics {
   totals: { accepted: number; rejected: number; total: number; acceptanceRate: number | null }
 }
 
+interface PrecisionBucket {
+  bucket: string
+  total: number
+  accepted: number
+  acceptanceRate: number | null
+}
+
 export default function Dashboard() {
   const { data: repos, mutate: mutateRepos } = useSWR<Repo[]>('/api/repos', fetcher, { refreshInterval: 30000 })
   const { data: reviews } = useSWR<Review[]>('/api/reviews', fetcher, { refreshInterval: 30000 })
@@ -63,6 +70,12 @@ export default function Dashboard() {
 
   const { data: metrics } = useSWR<FeedbackMetrics>(
     selectedRepoId ? `/api/repos/${selectedRepoId}/feedback-metrics` : null,
+    fetcher,
+    { refreshInterval: 60000 },
+  )
+
+  const { data: precisionData } = useSWR<{ buckets: PrecisionBucket[] }>(
+    selectedRepoId ? `/api/repos/${selectedRepoId}/precision` : null,
     fetcher,
     { refreshInterval: 60000 },
   )
@@ -176,6 +189,27 @@ export default function Dashboard() {
             ) : (
               <div className="border border-border py-12 text-center">
                 <p className="label-meta text-muted-foreground">Loading…</p>
+              </div>
+            )}
+            {precisionData && precisionData.buckets.length > 0 && (
+              <div className="mt-8">
+                <p className="label-meta mb-4">Confidence Calibration</p>
+                <div className="border-t border-border">
+                  <div className="grid grid-cols-3 border-b border-border py-2">
+                    <span className="label-meta">Confidence</span>
+                    <span className="label-meta text-right">Comments</span>
+                    <span className="label-meta text-right">Acceptance</span>
+                  </div>
+                  {precisionData.buckets.map(b => (
+                    <div key={b.bucket} className="grid grid-cols-3 border-b border-border py-3">
+                      <span className="font-mono text-xs">{b.bucket}</span>
+                      <span className="font-mono text-xs text-right">{b.total}</span>
+                      <span className="font-mono text-xs text-right">
+                        {b.acceptanceRate !== null ? `${b.acceptanceRate}%` : '—'}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </section>

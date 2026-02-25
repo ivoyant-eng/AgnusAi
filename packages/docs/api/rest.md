@@ -255,6 +255,27 @@ Weekly accepted/rejected feedback counts for a repo. Used by the Dashboard Learn
 
 ---
 
+### `GET /api/repos/:id/precision` _(auth required)_
+
+Per-confidence-bucket acceptance rates for a repo. Used by the Dashboard Confidence Calibration table to show whether the LLM's self-assessed confidence correlates with developer acceptance.
+
+**Response:**
+```json
+{
+  "buckets": [
+    {"bucket": "0.9-1.0", "total": 12, "accepted": 11, "acceptanceRate": 92},
+    {"bucket": "0.8-0.9", "total": 24, "accepted": 18, "acceptanceRate": 75},
+    {"bucket": "0.7-0.8", "total": 18, "accepted": 11, "acceptanceRate": 61},
+    {"bucket": "0.5-0.7", "total":  6, "accepted":  2, "acceptanceRate": 33},
+    {"bucket": "unknown",  "total":  3, "accepted":  1, "acceptanceRate": 33}
+  ]
+}
+```
+
+`acceptanceRate` is `null` when `total` is 0. The `unknown` bucket captures comments where the LLM did not emit a `[Confidence: X.X]` marker. Returns an empty `buckets` array when no rated comments exist yet.
+
+---
+
 ### `DELETE /api/repos/:id` _(auth required)_
 
 Deregister a repo. Removes it from the database and evicts it from the in-memory graph cache.

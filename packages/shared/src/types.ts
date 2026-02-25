@@ -33,6 +33,7 @@ export interface GraphReviewContext {
   blastRadius: BlastRadius
   semanticNeighbors: ParsedSymbol[]
   priorExamples?: string[]
+  rejectedExamples?: string[]
 }
 
 export interface IndexProgress {

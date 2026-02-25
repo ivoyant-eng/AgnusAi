@@ -100,14 +100,17 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     graphContext = await entry.retriever.getReviewContext(diffString, repoId)
   }
 
-  // Retrieve prior accepted comments via embedding similarity (RAG)
+  // Retrieve prior accepted + rejected comments via embedding similarity (RAG)
   let priorExamples: string[] = []
+  let rejectedExamples: string[] = []
   const embAdapter = createEmbeddingAdapter(pool)
   if (embAdapter && diffString) {
     try {
       const diffSample = diffString.substring(0, 8000)
       const [embedding] = await embAdapter.embed([diffSample])
-      const { rows } = await pool.query(
+      const vectorLiteral = `[${embedding.join(',')}]`
+
+      const { rows: acceptedRows } = await pool.query(
         `SELECT rc.body, rc.path
          FROM review_comments rc
          JOIN review_feedback rf ON rf.comment_id = rc.id
@@ -116,27 +119,45 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
            AND rc.embedding IS NOT NULL
          ORDER BY rc.embedding <-> $2
          LIMIT 5`,
-        [repoId, `[${embedding.join(',')}]`],
+        [repoId, vectorLiteral],
       )
-      priorExamples = rows.map((r: any) => {
+      priorExamples = acceptedRows.map((r: any) => {
+        const cleanBody = r.body.split('\n\n---\nWas this helpful?')[0].trim()
+        return `[${r.path}]\n${cleanBody}`
+      })
+
+      const { rows: rejectedRows } = await pool.query(
+        `SELECT rc.body, rc.path
+         FROM review_comments rc
+         JOIN review_feedback rf ON rf.comment_id = rc.id
+         WHERE rc.repo_id = $1
+           AND rf.signal = 'rejected'
+           AND rc.embedding IS NOT NULL
+         ORDER BY rc.embedding <-> $2
+         LIMIT 3`,
+        [repoId, vectorLiteral],
+      )
+      rejectedExamples = rejectedRows.map((r: any) => {
         const cleanBody = r.body.split('\n\n---\nWas this helpful?')[0].trim()
         return `[${r.path}]\n${cleanBody}`
       })
     } catch (err) {
-      console.warn('[review-runner] Prior examples retrieval skipped:', (err as Error).message)
+      console.warn('[review-runner] RAG examples retrieval skipped:', (err as Error).message)
     }
   }
 
   // Attach examples to graphContext (or create a minimal ctx if graph wasn't available)
-  if (priorExamples.length > 0) {
+  if (priorExamples.length > 0 || rejectedExamples.length > 0) {
     if (graphContext) {
-      graphContext.priorExamples = priorExamples
+      if (priorExamples.length > 0) graphContext.priorExamples = priorExamples
+      if (rejectedExamples.length > 0) graphContext.rejectedExamples = rejectedExamples
     } else {
       graphContext = {
         changedSymbols: [], callers: [], callees: [],
         blastRadius: { directCallers: [], transitiveCallers: [], affectedFiles: [], riskScore: 0 },
         semanticNeighbors: [],
-        priorExamples,
+        priorExamples: priorExamples.length > 0 ? priorExamples : undefined,
+        rejectedExamples: rejectedExamples.length > 0 ? rejectedExamples : undefined,
       }
     }
   }
@@ -156,7 +177,7 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     process.env.SESSION_SECRET ||
     ''
 
-  const commentRows: Array<{ id: string; path: string; line: number; body: string; severity: string }> = []
+  const commentRows: Array<{ id: string; path: string; line: number; body: string; severity: string; confidence: number | null }> = []
 
   const comments: any[] = Array.isArray((result as any).comments) ? (result as any).comments : []
 
@@ -185,6 +206,7 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
         line: comment.line ?? 0,
         body: comment.body,
         severity: comment.severity ?? 'info',
+        confidence: comment.confidence ?? null,
       })
     }
   }
@@ -215,9 +237,9 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
   if (commentRows.length > 0) {
     for (const row of commentRows) {
       await pool.query(
-        `INSERT INTO review_comments (id, review_id, repo_id, pr_number, path, line, body, severity)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [row.id, reviewId, repoId, prNumber, row.path, row.line, row.body, row.severity],
+        `INSERT INTO review_comments (id, review_id, repo_id, pr_number, path, line, body, severity, confidence)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [row.id, reviewId, repoId, prNumber, row.path, row.line, row.body, row.severity, row.confidence],
       )
     }
   }

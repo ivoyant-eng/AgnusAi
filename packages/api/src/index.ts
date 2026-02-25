@@ -57,6 +57,36 @@ async function buildServer() {
   await app.register(repoRoutes)
   await app.register(feedbackRoutes)
 
+  // GET /api/repos/:id/precision — per-confidence-bucket acceptance rates (auth required)
+  app.get('/api/repos/:id/precision', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { rows } = await app.db.query(
+      `SELECT
+         CASE
+           WHEN rc.confidence >= 0.9 THEN '0.9-1.0'
+           WHEN rc.confidence >= 0.8 THEN '0.8-0.9'
+           WHEN rc.confidence >= 0.7 THEN '0.7-0.8'
+           WHEN rc.confidence >= 0.5 THEN '0.5-0.7'
+           ELSE 'unknown'
+         END AS bucket,
+         COUNT(*)::int AS total,
+         COUNT(rf.id) FILTER (WHERE rf.signal = 'accepted')::int AS accepted
+       FROM review_comments rc
+       LEFT JOIN review_feedback rf ON rf.comment_id = rc.id
+       WHERE rc.repo_id = $1
+       GROUP BY bucket
+       ORDER BY bucket DESC`,
+      [id],
+    )
+    const buckets = rows.map((r: any) => ({
+      bucket: r.bucket,
+      total: r.total,
+      accepted: r.accepted,
+      acceptanceRate: r.total > 0 ? Math.round((r.accepted / r.total) * 100) : null,
+    }))
+    return reply.send({ buckets })
+  })
+
   // GET /api/reviews — return last 50 reviews (auth required)
   app.get('/api/reviews', { preHandler: [requireAuth] }, async (_req, reply) => {
     const { rows } = await app.db.query(`
@@ -238,6 +268,7 @@ async function main() {
   await pool.query(
     `ALTER TABLE review_comments ADD COLUMN IF NOT EXISTS embedding vector(${commentEmbDim})`
   )
+  await pool.query(`ALTER TABLE review_comments ADD COLUMN IF NOT EXISTS confidence FLOAT`)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS system_api_keys (
       id INT PRIMARY KEY DEFAULT 1,
