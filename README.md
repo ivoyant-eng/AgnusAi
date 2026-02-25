@@ -63,61 +63,47 @@ AZURE_DEVOPS_TOKEN=... \
 
 Full graph-aware reviews via webhooks. Requires Docker.
 
-### 1. Clone and configure
+### 1. Clone and run the installer
 
 ```bash
 git clone https://github.com/ivoyant-eng/AgnusAi.git
 cd AgnusAi
-cp .env.example .env
+bash install.sh
 ```
 
-Edit `.env`:
+The installer walks you through: LLM provider + API key, embedding provider (optional), Ollama setup (Docker or host — **fully optional** if using a cloud provider), GitHub token, and launches `docker compose up --build`. Secrets are auto-generated.
 
-```env
-# Auth — admin bootstrapped on first run
-ADMIN_EMAIL=admin@example.com
-ADMIN_PASSWORD=changeme
-JWT_SECRET=change-me-in-production
+**Or manually:**
 
-# Webhooks
-WEBHOOK_SECRET=your-secret-here
-
-# LLM — defaults to local Ollama
-LLM_PROVIDER=ollama
-LLM_MODEL=qwen2.5-coder
-
-# Embeddings — for deep review mode (optional)
-EMBEDDING_PROVIDER=ollama
-EMBEDDING_MODEL=qwen3-embedding:0.6b
-
-# Review depth: fast | standard | deep
-REVIEW_DEPTH=standard
-PRECISION_THRESHOLD=0.7
-MAX_DIFF_SIZE=150000
+```bash
+cp .env.example .env
+# Fill in: WEBHOOK_SECRET, SESSION_SECRET, JWT_SECRET, LLM_PROVIDER + key, PUBLIC_URL
+docker compose up --build
 ```
 
 ### 2. Start with Docker Compose
 
+Starts:
+- **AgnusAI API** on `http://localhost:3000` (via Traefik)
+- **Postgres + pgvector**
+- **Traefik** reverse proxy (dashboard at `:8080`)
+
+**Ollama is optional.** Use it if you want a local free LLM. If you set `LLM_PROVIDER=openai/claude/azure`, no Ollama needed.
+
+### 3. Pull LLM models (only if using Ollama)
+
+If Ollama is on your **host**:
 ```bash
-docker compose up --build
-```
-
-This starts:
-- **AgnusAI API** on `http://localhost:3000`
-- **Postgres + pgvector** on port 5432
-
-> Ollama runs on your host, not inside Docker. The container connects to `host.docker.internal:11434` by default.
-
-### 3. Pull LLM models (first time)
-
-AgnusAI connects to Ollama running **on your host** (not inside Docker). Pull models directly:
-
-```bash
-ollama pull qwen2.5-coder
+ollama pull qwen3.5:397b-cloud
 ollama pull qwen3-embedding:0.6b   # only if EMBEDDING_PROVIDER=ollama
 ```
 
-> If Ollama is not installed: [ollama.ai/download](https://ollama.ai/download). The container reaches it at `host.docker.internal:11434`.
+If Ollama is in **Docker** (via `docker-compose.override.yml` from the installer):
+```bash
+docker compose exec ollama ollama pull qwen3.5:397b-cloud
+```
+
+If you chose OpenAI, Claude, or Azure — skip this step entirely.
 
 ### 4. Log in to the dashboard
 
