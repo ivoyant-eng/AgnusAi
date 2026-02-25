@@ -119,8 +119,11 @@ If you propose a fix, implement it and please make it concise.
 \`\`\`
 </details>
 
+[Confidence: 0.91]
+
 [File: /next/file/path.py, Line: 55]
 ... next comment body ...
+[Confidence: 0.75]
 
 VERDICT: approve|request_changes|comment
 
