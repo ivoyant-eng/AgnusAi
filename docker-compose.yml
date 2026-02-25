@@ -13,7 +13,7 @@
 
 services:
   traefik:
-    image: traefik:v3.1
+    image: traefik:v3.6.9
     command:
       - "--api.dashboard=true"
       - "--api.insecure=true"
@@ -30,15 +30,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.agnus-dashboard.rule=PathPrefix(`/dashboard`)"
-      - "traefik.http.routers.agnus-dashboard.entrypoints=web"
-      - "traefik.http.routers.agnus-dashboard.service=agnus-dashboard"
-      - "traefik.http.services.agnus-dashboard.loadbalancer.server.port=3000"
-      - "traefik.http.routers.agnus-docs.rule=PathPrefix(`/docs`)"
-      - "traefik.http.routers.agnus-docs.entrypoints=web"
-      - "traefik.http.routers.agnus-docs.service=agnus-docs"
-      - "traefik.http.services.agnus-docs.loadbalancer.server.port=3000"
+      - "traefik.enable=false"
     restart: unless-stopped
     networks:
       - agnus-network

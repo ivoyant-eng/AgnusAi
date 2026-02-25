@@ -211,7 +211,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       return { additions: 0, deletions: 0, hunks: [] };
     }
 
-    const edits = this.lcsEdits(oldLines, newLines);
+    const edits = this.myersDiff(oldLines, newLines);
     const additions = edits.filter(e => e.type === 'add').length;
     const deletions = edits.filter(e => e.type === 'remove').length;
     const hunks = this.buildHunks(edits, 3);
@@ -219,42 +219,82 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     return { additions, deletions, hunks };
   }
 
-  private lcsEdits(
+  /**
+   * Myers diff algorithm (O(N·D) time, O(N) space) — same algorithm used by Git.
+   * Line hashing speeds up equality checks. Falls back to full-replacement only
+   * when the edit distance itself exceeds a safe trace-memory limit.
+   */
+  private myersDiff(
     oldLines: string[],
     newLines: string[]
   ): Array<{ type: 'equal' | 'add' | 'remove'; oldLine: number; newLine: number; content: string }> {
     const m = oldLines.length;
     const n = newLines.length;
+    const max = m + n;
+    if (max === 0) return [];
 
-    // Avoid O(m*n) blowup on very large files — treat as full replacement
-    if (m * n > 600_000) {
-      return [
-        ...oldLines.map((c, i) => ({ type: 'remove' as const, oldLine: i + 1, newLine: 0, content: c })),
-        ...newLines.map((c, i) => ({ type: 'add' as const, oldLine: 0, newLine: i + 1, content: c }))
-      ];
-    }
+    // FNV-1a line hashing for fast equality checks
+    const hash = (s: string): number => {
+      let h = 2166136261;
+      for (let i = 0; i < s.length; i++) h = Math.imul(h ^ s.charCodeAt(i), 16777619);
+      return h >>> 0;
+    };
+    const oldH = oldLines.map(hash);
+    const newH = newLines.map(hash);
+    const eq = (oi: number, ni: number) => oldH[oi] === newH[ni] && oldLines[oi] === newLines[ni];
 
-    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0) as number[]);
-    for (let i = 1; i <= m; i++) {
-      for (let j = 1; j <= n; j++) {
-        dp[i][j] = oldLines[i - 1] === newLines[j - 1]
-          ? dp[i - 1][j - 1] + 1
-          : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    // Myers forward pass — V[k+offset] = furthest x on diagonal k
+    const offset = max;
+    const V = new Int32Array(2 * max + 2).fill(-1);
+    V[1 + offset] = 0;
+    const trace: Int32Array[] = [];
+
+    let found = false;
+    for (let d = 0; d <= max && !found; d++) {
+      // Safety: stop storing trace if edit distance is huge (degenerate diff)
+      if (d > 8000) {
+        return [
+          ...oldLines.map((c, i) => ({ type: 'remove' as const, oldLine: i + 1, newLine: 0, content: c })),
+          ...newLines.map((c, i) => ({ type: 'add' as const, oldLine: 0, newLine: i + 1, content: c })),
+        ];
+      }
+      trace.push(new Int32Array(V));
+      for (let k = -d; k <= d; k += 2) {
+        const km1 = V[k - 1 + offset];
+        const kp1 = V[k + 1 + offset];
+        let x = (k === -d || (k !== d && km1 < kp1)) ? kp1 : km1 + 1;
+        let y = x - k;
+        while (x < m && y < n && eq(x, y)) { x++; y++; }
+        V[k + offset] = x;
+        if (x >= m && y >= n) { found = true; break; }
       }
     }
 
-    const result: Array<{ type: 'equal' | 'add' | 'remove'; oldLine: number; newLine: number; content: string }> = [];
-    let i = m, j = n;
-    while (i > 0 || j > 0) {
-      if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
-        result.unshift({ type: 'equal', oldLine: i, newLine: j, content: oldLines[i - 1] });
-        i--; j--;
-      } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
-        result.unshift({ type: 'add', oldLine: 0, newLine: j, content: newLines[j - 1] });
-        j--;
-      } else {
-        result.unshift({ type: 'remove', oldLine: i, newLine: 0, content: oldLines[i - 1] });
-        i--;
+    // Backtrack through trace to reconstruct edit list
+    type Edit = { type: 'equal' | 'add' | 'remove'; oldLine: number; newLine: number; content: string };
+    const result: Edit[] = [];
+    let x = m, y = n;
+    for (let d = trace.length - 1; d >= 0 && (x > 0 || y > 0); d--) {
+      const Vd = trace[d];
+      const k = x - y;
+      const km1 = Vd[k - 1 + offset];
+      const kp1 = Vd[k + 1 + offset];
+      const prevK = (k === -d || (k !== d && km1 < kp1)) ? k + 1 : k - 1;
+      const prevX = Vd[prevK + offset];
+      const prevY = prevX - prevK;
+      // Unwind snake
+      while (x > prevX && y > prevY) {
+        x--; y--;
+        result.unshift({ type: 'equal', oldLine: x + 1, newLine: y + 1, content: oldLines[x] });
+      }
+      if (d > 0) {
+        if (x === prevX) {
+          y--;
+          result.unshift({ type: 'add', oldLine: 0, newLine: y + 1, content: newLines[y] });
+        } else {
+          x--;
+          result.unshift({ type: 'remove', oldLine: x + 1, newLine: 0, content: oldLines[x] });
+        }
       }
     }
     return result;
@@ -298,7 +338,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
         oldLines: oldLineCount,
         newStart,
         newLines: newLineCount,
-        content: `@@ -${oldStart},${oldLineCount} +${newStart},${newLineCount} @@\n${body}`
+        content: body
       };
     });
   }

@@ -346,17 +346,38 @@ export class PRReviewAgent {
     // Build a set of canonical diff paths (normalised: no leading slash) for matching
     const diff = this.lastDiff ?? await this.vcs.getDiff(prId);
     const diffPathMap = new Map<string, string>(); // normalised → original
+    // Build per-file set of added (+) line numbers for validation
+    const changedLinesMap = new Map<string, Set<number>>(); // normalised path → Set of new-file line numbers
     for (const f of diff.files) {
-      diffPathMap.set(f.path.replace(/^\//, ''), f.path);
+      const key = f.path.replace(/^\//, '');
+      diffPathMap.set(key, f.path);
+      const addedLines = new Set<number>();
+      for (const hunk of f.hunks) {
+        let lineNo = hunk.newStart;
+        for (const line of hunk.content.split('\n')) {
+          if (line.startsWith('+')) {
+            addedLines.add(lineNo++);
+          } else if (!line.startsWith('-')) {
+            lineNo++; // context line — advance new-file counter
+          }
+          // '-' lines don't advance the new-file line counter
+        }
+      }
+      changedLinesMap.set(key, addedLines);
     }
 
-    // Resolve each comment's path against actual diff paths
+    // Resolve each comment's path against actual diff paths and validate line is a + line
     const validComments: ReviewComment[] = [];
     for (const comment of result.comments) {
       const normalised = comment.path.replace(/^\//, '');
       const resolvedPath = diffPathMap.get(normalised);
       if (!resolvedPath) {
         console.warn(`⚠️  Skipping comment — path not in diff: ${comment.path}`);
+        continue;
+      }
+      const addedLines = changedLinesMap.get(normalised);
+      if (addedLines && addedLines.size > 0 && !addedLines.has(comment.line)) {
+        console.warn(`⚠️  Skipping comment at ${comment.path}:${comment.line} — line is not a changed (+) line in this PR`);
         continue;
       }
       validComments.push({ ...comment, path: resolvedPath });
