@@ -31,7 +31,7 @@ Minimum required for CLI:
 ```bash
 # LLM provider
 LLM_PROVIDER=ollama
-LLM_BASE_URL=http://localhost:11434/v1
+OLLAMA_BASE_URL=http://localhost:11434/v1
 LLM_MODEL=qwen2.5-coder
 
 # GitHub token
@@ -76,7 +76,7 @@ Then set in `.env`:
 
 ```bash
 LLM_PROVIDER=ollama
-LLM_BASE_URL=http://localhost:11434/v1
+OLLAMA_BASE_URL=http://localhost:11434/v1
 LLM_MODEL=qwen2.5-coder
 ```
 
@@ -84,15 +84,15 @@ LLM_MODEL=qwen2.5-coder
 
 ```bash
 LLM_PROVIDER=openai
-LLM_API_KEY=sk-...
+OPENAI_API_KEY=sk-...
 LLM_MODEL=gpt-4o-mini   # or gpt-4o for deeper analysis
 ```
 
 ## Using with Claude
 
 ```bash
-LLM_PROVIDER=anthropic
-LLM_API_KEY=sk-ant-...
+LLM_PROVIDER=claude
+ANTHROPIC_API_KEY=sk-ant-...
 LLM_MODEL=claude-sonnet-4-6
 ```
 

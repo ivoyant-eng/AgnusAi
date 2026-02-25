@@ -1,6 +1,6 @@
 # Environment Variables
 
-All configuration is through environment variables. Copy `.env.example` to `.env` to get started.
+All configuration is through environment variables. The easiest way to get a correct `.env` is to run `bash install.sh` — it copies `.env.example` and auto-generates `WEBHOOK_SECRET`, `SESSION_SECRET`, and `JWT_SECRET` with `openssl rand -hex 32`. To set up manually, copy `.env.example` to `.env` and generate those secrets yourself.
 
 ## Authentication
 

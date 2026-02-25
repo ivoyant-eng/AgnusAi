@@ -98,11 +98,9 @@ After installation, you'll need to:
 
    If you chose a cloud provider (OpenAI, Claude, Azure) — skip this step entirely.
 
-2. **Configure your VCS token** in `.env`:
-   - `GITHUB_TOKEN` - GitHub personal access token
-   - `AZURE_DEVOPS_TOKEN` - Azure DevOps personal access token
+2. **Connect your repositories** via the dashboard at `http://localhost:3000/app/`
 
-3. **Register your first repository** via the dashboard at `http://localhost:3000/dashboard`
+   Click **Connect Repo**, enter the repo URL, your VCS token (GitHub PAT or Azure DevOps PAT), and the branches to index. Tokens are stored per-repo — no need to set them in `.env`.
 
 ---
 
