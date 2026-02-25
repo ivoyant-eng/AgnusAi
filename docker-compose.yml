@@ -12,12 +12,24 @@ services:
       SESSION_SECRET: ${SESSION_SECRET}
       API_KEY: ${API_KEY:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
-      LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
-      LLM_API_KEY: ${LLM_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-qwen3.5:397b-cloud}
+      # Ollama
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      # OpenAI
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Azure OpenAI
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT:-}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY:-}
+      AZURE_API_VERSION: ${AZURE_API_VERSION:-2025-01-01-preview}
+      # Anthropic / Claude
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Custom OpenAI-compatible endpoint
+      CUSTOM_LLM_URL: ${CUSTOM_LLM_URL:-}
+      CUSTOM_LLM_API_KEY: ${CUSTOM_LLM_API_KEY:-}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
       REVIEW_DEPTH: ${REVIEW_DEPTH:-standard}
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       BASE_URL: ${BASE_URL:-http://localhost:3000}

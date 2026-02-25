@@ -23,14 +23,14 @@ ollama pull qwen3.5:397b-cloud   # cloud-hosted via Ollama
 
 ```bash
 LLM_PROVIDER=ollama
-LLM_BASE_URL=http://localhost:11434/v1
 LLM_MODEL=qwen2.5-coder
+OLLAMA_BASE_URL=http://localhost:11434/v1
 ```
 
-In Docker Compose:
+In Docker Compose (Ollama running on the host):
 
 ```bash
-LLM_BASE_URL=http://ollama:11434/v1
+OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
 ```
 
 ## Recommended Models

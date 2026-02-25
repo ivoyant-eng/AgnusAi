@@ -55,6 +55,26 @@ export function createEmbeddingAdapter(pool: Pool): EmbeddingAdapter | null {
         db: pool,
       })
 
+    case 'azure': {
+      // Azure OpenAI embedding: deployment-scoped baseURL + api-key header + api-version query param
+      // EMBEDDING_BASE_URL: https://<resource>.cognitiveservices.azure.com/openai/deployments/<deployment>
+      if (!baseUrl) {
+        console.warn('[EmbeddingFactory] EMBEDDING_PROVIDER=azure but EMBEDDING_BASE_URL is not set — embeddings disabled')
+        return null
+      }
+      if (!apiKey) {
+        console.warn('[EmbeddingFactory] EMBEDDING_PROVIDER=azure but EMBEDDING_API_KEY is not set — embeddings disabled')
+        return null
+      }
+      return new HttpEmbeddingAdapter({
+        baseUrl,
+        model: model ?? 'text-embedding-ada-002',
+        headers: { 'api-key': apiKey },
+        queryParams: { 'api-version': process.env.AZURE_API_VERSION ?? '2025-01-01-preview' },
+        db: pool,
+      })
+    }
+
     case 'http':
       if (!baseUrl) {
         console.warn('[EmbeddingFactory] EMBEDDING_PROVIDER=http but EMBEDDING_BASE_URL is not set — embeddings disabled')

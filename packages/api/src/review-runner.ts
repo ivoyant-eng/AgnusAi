@@ -4,7 +4,7 @@
  */
 import crypto from 'crypto'
 import path from 'path'
-import { PRReviewAgent, GitHubAdapter, AzureDevOpsAdapter, UnifiedLLMBackend } from '@agnus-ai/reviewer'
+import { PRReviewAgent, GitHubAdapter, AzureDevOpsAdapter, createBackendFromEnv } from '@agnus-ai/reviewer'
 import type { Config } from '@agnus-ai/reviewer'
 import type { Pool } from 'pg'
 
@@ -78,13 +78,8 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     },
   }
 
-  // Build LLM backend
-  const llm = new UnifiedLLMBackend({
-    provider: config.llm.provider,
-    model: config.llm.model,
-    baseURL: config.llm.providers?.ollama?.baseURL,
-    apiKey: process.env.LLM_API_KEY,
-  })
+  // Build LLM backend from provider-specific env vars
+  const llm = createBackendFromEnv(process.env)
 
   const agent = new PRReviewAgent(config)
   agent.setVCS(vcs)

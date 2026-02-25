@@ -8,7 +8,7 @@ import os from 'os';
 
 import { GitHubAdapter } from './adapters/vcs/github';
 import { AzureDevOpsAdapter } from './adapters/vcs/azure-devops';
-import { UnifiedLLMBackend, UnifiedLLMConfig, ProviderName } from './llm/unified';
+import { createBackendFromEnv } from './llm/unified';
 import { SkillLoader } from './skills/loader';
 import { PRReviewAgent } from './index';
 import { Config, LLMConfig } from './types';
@@ -93,7 +93,7 @@ program
 
       // Load config
       const config = loadConfig(options.config);
-      if (options.provider) config.llm.provider = options.provider as ProviderName;
+      if (options.provider) config.llm.provider = options.provider;
       if (options.model)    config.llm.model    = options.model;
 
       // Parse repo
@@ -131,7 +131,7 @@ program
         process.exit(1);
       }
 
-      const llm   = new UnifiedLLMBackend(getLLMConfig(config.llm));
+      const llm   = createBackendFromEnv(process.env);
       const agent = new PRReviewAgent(config);
       agent.setVCS(vcs);
       agent.setLLM(llm);
@@ -243,60 +243,6 @@ function loadConfig(configPath: string): Config {
   }
 }
 
-/**
- * Build UnifiedLLMConfig from the new config format with env var support
- */
-function getLLMConfig(config: LLMConfig): UnifiedLLMConfig {
-  const provider = config.provider as ProviderName;
-  const model = config.model;
-
-  // Get provider-specific settings from config
-  const providerConfig = config.providers?.[provider] as {
-    baseURL?: string;
-    apiKey?: string;
-    headers?: Record<string, string>;
-  } | undefined;
-
-  const result: UnifiedLLMConfig = {
-    provider,
-    model,
-    baseURL: providerConfig?.baseURL,
-    apiKey: providerConfig?.apiKey,
-  };
-
-  // Environment variable overrides (highest priority)
-  switch (provider) {
-    case 'ollama':
-      result.baseURL = process.env.OLLAMA_BASE_URL || result.baseURL || 'http://localhost:11434/v1';
-      break;
-    case 'openai':
-      result.apiKey = process.env.OPENAI_API_KEY || result.apiKey;
-      result.baseURL = process.env.OPENAI_BASE_URL || result.baseURL || 'https://api.openai.com/v1';
-      break;
-    case 'azure':
-      result.apiKey = process.env.AZURE_OPENAI_KEY || result.apiKey;
-      result.baseURL = process.env.AZURE_OPENAI_ENDPOINT || result.baseURL;
-      break;
-    case 'custom':
-      result.apiKey = process.env.CUSTOM_API_KEY || result.apiKey;
-      result.baseURL = process.env.CUSTOM_ENDPOINT || result.baseURL;
-      break;
-  }
-
-  // Validate that cloud providers have API keys
-  if ((provider === 'openai' || provider === 'azure' || provider === 'custom') && !result.apiKey) {
-    console.error(`API key required for provider '${provider}'. Set the appropriate environment variable.`);
-    process.exit(1);
-  }
-
-  // Validate that custom/azure have baseURL
-  if ((provider === 'custom' || provider === 'azure') && !result.baseURL) {
-    console.error(`baseURL is required for provider '${provider}'. Set it in config or environment variable.`);
-    process.exit(1);
-  }
-
-  return result;
-}
 
 function printMarkdownReview(result: import('./types').ReviewResult): void {
   const verdictEmoji = {

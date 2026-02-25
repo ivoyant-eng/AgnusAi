@@ -3,9 +3,7 @@
 export { LLMBackend } from './base';
 export {
   UnifiedLLMBackend,
-  createUnifiedBackend,
   createBackendFromEnv,
-  PROVIDER_PRESETS,
   type ProviderName,
   type UnifiedLLMConfig,
 } from './unified';

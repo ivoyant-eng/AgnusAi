@@ -33,6 +33,9 @@
   "author": "Ashish Maurya",
   "license": "MIT",
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.47",
+    "@ai-sdk/azure": "^3.0.34",
+    "@ai-sdk/openai": "^3.0.33",
     "@ai-sdk/openai-compatible": "^2.0.30",
     "@octokit/rest": "^20.0.2",
     "ai": "^6.0.91",

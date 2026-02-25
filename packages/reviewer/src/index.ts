@@ -11,7 +11,7 @@ export { TicketAdapter } from './adapters/ticket/base';
 export { OllamaBackend, createOllamaBackend } from './llm/ollama';
 export { ClaudeBackend, createClaudeBackend } from './llm/claude';
 export { OpenAIBackend, createOpenAIBackend } from './llm/openai';
-export { UnifiedLLMBackend, UnifiedLLMConfig, ProviderName, PROVIDER_PRESETS } from './llm/unified';
+export { UnifiedLLMBackend, UnifiedLLMConfig, ProviderName, createBackendFromEnv } from './llm/unified';
 export { LLMBackend } from './llm/base';
 
 export { SkillLoader } from './skills/loader';

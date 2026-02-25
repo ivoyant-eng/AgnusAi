@@ -19,7 +19,8 @@ export interface HttpEmbeddingConfig {
   model: string         // e.g. "text-embedding-3-small", "embed-v4.0"
   dim?: number          // default: 1536
   db: Pool
-  headers?: Record<string, string>  // extra headers (e.g. for Azure api-version)
+  headers?: Record<string, string>   // extra headers (e.g. api-key for Azure)
+  queryParams?: Record<string, string> // extra query params (e.g. api-version for Azure)
 }
 
 interface OAIEmbeddingResponse {
@@ -46,7 +47,13 @@ export class HttpEmbeddingAdapter implements EmbeddingAdapter {
       headers['Authorization'] = `Bearer ${this.config.apiKey}`
     }
 
-    const res = await fetch(`${this.config.baseUrl}/embeddings`, {
+    const url = new URL(`${this.config.baseUrl}/embeddings`)
+    if (this.config.queryParams) {
+      for (const [k, v] of Object.entries(this.config.queryParams)) {
+        url.searchParams.set(k, v)
+      }
+    }
+    const res = await fetch(url.toString(), {
       method: 'POST',
       headers,
       body: JSON.stringify({ model: this.config.model, input: texts }),
