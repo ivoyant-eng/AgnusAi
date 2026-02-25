@@ -6,15 +6,15 @@ Use GPT models for high-quality reviews via the OpenAI API.
 
 ```bash
 LLM_PROVIDER=openai
-LLM_API_KEY=sk-...
 LLM_MODEL=gpt-4o-mini
+OPENAI_API_KEY=sk-proj-...
 ```
 
 ## Available Models
 
 | Model | Notes |
 |-------|-------|
-| `gpt-4o-mini` | **Recommended** — fast, cheap, good quality |
+| `gpt-4o-mini` | **Recommended** — fast, cheap, follows instructions well |
 | `gpt-4o` | Best quality, higher cost |
 | `gpt-4-turbo` | Legacy 128K context |
 | `o3-mini` | Strong reasoning |
