@@ -1,8 +1,12 @@
 import crypto from 'crypto'
+import { exec } from 'child_process'
+import { promisify } from 'util'
 import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
 import { getOrLoadRepo } from '../graph-cache'
 import { runReview } from '../review-runner'
+
+const execAsync = promisify(exec)
 
 export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   const pool: Pool = app.db
@@ -52,6 +56,9 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
           try {
             const repoPathRow = await pool.query<{ repo_path: string | null }>('SELECT repo_path FROM repos WHERE repo_id = $1', [repoId])
             const repoPath = repoPathRow.rows[0]?.repo_path ?? undefined
+            if (repoPath) {
+              await execAsync(`git -C "${repoPath}" fetch --depth=1 origin && git -C "${repoPath}" reset --hard origin/HEAD`, { timeout: 60_000 })
+            }
             const entry = await getOrLoadRepo(repoId, branch)
             await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch, repoPath)
           } catch (err) {
@@ -127,6 +134,9 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
           try {
             const repoPathRow = await pool.query<{ repo_path: string | null }>('SELECT repo_path FROM repos WHERE repo_id = $1', [repoId])
             const repoPath = repoPathRow.rows[0]?.repo_path ?? undefined
+            if (repoPath) {
+              await execAsync(`git -C "${repoPath}" fetch --depth=1 origin && git -C "${repoPath}" reset --hard origin/HEAD`, { timeout: 60_000 })
+            }
             const entry = await getOrLoadRepo(repoId, branch)
             await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch, repoPath)
           } catch (err) {
