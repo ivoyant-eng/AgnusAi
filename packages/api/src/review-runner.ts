@@ -88,6 +88,12 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
   // Hoist diff to outer scope so it's available for RAG retrieval
   const diffString = await fetchDiffString(vcs, prNumber)
 
+  // Nothing to review — incremental diff was empty (e.g. no new commits since last review)
+  if (!diffString || diffString.trim().length === 0) {
+    console.log(`[review-runner] Empty diff for PR ${prNumber} — skipping review`)
+    return { verdict: 'comment', commentCount: 0, reviewId: '' }
+  }
+
   // Assemble graph context from the base branch's graph (gracefully degraded if not indexed)
   let graphContext: GraphReviewContext | undefined
   const entry = getRepo(repoId, baseBranch)
