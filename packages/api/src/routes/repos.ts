@@ -302,7 +302,7 @@ async function runFullIndex(
   let resolvedPath = repoPath
 
   // Determine clone directory: use stored path or derive from REPOS_DIR
-  const cloneDir = resolvedPath ?? `${REPOS_DIR}/${repoId}`
+  const cloneDir = resolvedPath || `${REPOS_DIR}/${repoId}`
 
   if (!repoUrl && !resolvedPath) {
     const errMsg = 'Cannot index: repoUrl is required for auto-cloning'

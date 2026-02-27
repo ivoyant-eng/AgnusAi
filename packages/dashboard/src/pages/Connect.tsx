@@ -1,15 +1,41 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRight, Save, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
+interface SavedCredential {
+  id: string
+  label: string
+  token: string
+  platform: 'github' | 'azure'
+}
+
+const CREDS_KEY = 'agnus:saved_credentials'
+
+function loadCredentials(): SavedCredential[] {
+  try { return JSON.parse(localStorage.getItem(CREDS_KEY) ?? '[]') } catch { return [] }
+}
+
+function saveCredential(cred: SavedCredential) {
+  const existing = loadCredentials().filter(c => c.id !== cred.id)
+  localStorage.setItem(CREDS_KEY, JSON.stringify([...existing, cred]))
+}
+
+function deleteCredential(id: string) {
+  const updated = loadCredentials().filter(c => c.id !== id)
+  localStorage.setItem(CREDS_KEY, JSON.stringify(updated))
+}
+
 export default function Connect() {
   const navigate = useNavigate()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [savedCreds, setSavedCreds] = useState<SavedCredential[]>([])
+  const [saveLabel, setSaveLabel] = useState('')
+  const [showSaveInput, setShowSaveInput] = useState(false)
   const [form, setForm] = useState({
     repoUrl: '',
     token: '',
@@ -17,6 +43,35 @@ export default function Connect() {
     repoPath: '',
     branchesInput: '',
   })
+
+  // Reload saved creds when platform changes
+  useEffect(() => {
+    setSavedCreds(loadCredentials().filter(c => c.platform === form.platform))
+  }, [form.platform])
+
+  function handleSelectCredential(id: string) {
+    const cred = savedCreds.find(c => c.id === id)
+    if (cred) setForm(f => ({ ...f, token: cred.token }))
+  }
+
+  function handleSaveCredential() {
+    if (!saveLabel.trim() || !form.token) return
+    const cred: SavedCredential = {
+      id: Date.now().toString(),
+      label: saveLabel.trim(),
+      token: form.token,
+      platform: form.platform,
+    }
+    saveCredential(cred)
+    setSavedCreds(loadCredentials().filter(c => c.platform === form.platform))
+    setSaveLabel('')
+    setShowSaveInput(false)
+  }
+
+  function handleDeleteCredential(id: string) {
+    deleteCredential(id)
+    setSavedCreds(loadCredentials().filter(c => c.platform === form.platform))
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -127,13 +182,79 @@ export default function Connect() {
 
           <div className="space-y-2">
             <Label htmlFor="token">Access Token</Label>
+
+            {/* Saved credentials picker */}
+            {savedCreds.length > 0 && (
+              <div className="flex gap-2 items-center">
+                <Select onValueChange={handleSelectCredential}>
+                  <SelectTrigger className="text-xs h-8">
+                    <SelectValue placeholder="Use saved credential…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {savedCreds.map(c => (
+                      <SelectItem key={c.id} value={c.id}>
+                        <span className="flex items-center justify-between gap-6 w-full">
+                          <span>{c.label}</span>
+                          <span className="font-mono text-muted-foreground">{c.token.slice(0, 8)}…</span>
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {/* Delete button shown after a cred is selected — manage via label */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                  title="Manage saved credentials"
+                  onClick={() => {
+                    const id = savedCreds.find(c => c.token === form.token)?.id
+                    if (id) handleDeleteCredential(id)
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
+
             <Input
               id="token"
               type="password"
-              placeholder="ghp_..."
+              placeholder={form.platform === 'azure' ? 'PAT from dev.azure.com…' : 'ghp_…'}
               value={form.token}
               onChange={e => setForm(f => ({ ...f, token: e.target.value }))}
             />
+
+            {/* Save current token */}
+            {form.token && !showSaveInput && (
+              <button
+                type="button"
+                className="label-meta flex items-center gap-1 hover:text-foreground transition-colors"
+                onClick={() => setShowSaveInput(true)}
+              >
+                <Save className="h-3 w-3" /> Save this token
+              </button>
+            )}
+            {showSaveInput && (
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Label, e.g. Ashish Azure PAT"
+                  value={saveLabel}
+                  onChange={e => setSaveLabel(e.target.value)}
+                  className="h-8 text-xs"
+                  onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleSaveCredential())}
+                  autoFocus
+                />
+                <Button type="button" size="sm" className="h-8 text-xs shrink-0" onClick={handleSaveCredential}>
+                  Save
+                </Button>
+                <Button type="button" variant="ghost" size="sm" className="h-8 text-xs shrink-0" onClick={() => setShowSaveInput(false)}>
+                  Cancel
+                </Button>
+              </div>
+            )}
+
             <p className="label-meta">Required to post review comments to PRs.</p>
           </div>
 
