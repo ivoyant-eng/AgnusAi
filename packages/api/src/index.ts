@@ -283,6 +283,16 @@ async function main() {
       [process.env.API_KEY],
     )
   }
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS pr_review_state (
+      repo_id   TEXT NOT NULL,
+      pr_number INT  NOT NULL,
+      platform  TEXT NOT NULL DEFAULT 'azure',
+      last_reviewed_iteration INT NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (repo_id, pr_number, platform)
+    )
+  `)
   app.log.info('Database schema migrated')
   await seedAdminUser(pool)
 
