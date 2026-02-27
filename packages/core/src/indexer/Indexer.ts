@@ -97,15 +97,14 @@ export class Indexer {
    * Re-index only the changed files.
    * Removes old symbols/edges for each file before re-parsing.
    */
-  async incrementalUpdate(changedFiles: string[], repoId: string, branch: string): Promise<void> {
+  async incrementalUpdate(changedFiles: string[], repoId: string, branch: string, repoPath?: string): Promise<void> {
     for (const relPath of changedFiles) {
       this.graph.removeFile(relPath)
       await this.storage.deleteByFile(relPath, repoId, branch)
 
       try {
-        // We need the absolute path — callers pass relative paths so we need repoPath
-        // The repoPath must be stored or passed. For now accept absolute paths too.
-        const content = await fs.readFile(relPath, 'utf-8')
+        const absPath = repoPath ? path.join(repoPath, relPath) : relPath
+        const content = await fs.readFile(absPath, 'utf-8')
         const result = this.registry.parseFile(relPath, content, repoId)
         if (!result) continue
 
