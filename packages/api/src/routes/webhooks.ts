@@ -50,8 +50,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       if (uniqueFiles.length > 0) {
         setImmediate(async () => {
           try {
+            const repoPathRow = await pool.query<{ repo_path: string | null }>('SELECT repo_path FROM repos WHERE repo_id = $1', [repoId])
+            const repoPath = repoPathRow.rows[0]?.repo_path ?? undefined
             const entry = await getOrLoadRepo(repoId, branch)
-            await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch)
+            await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch, repoPath)
           } catch (err) {
             console.error('[webhook] Incremental index failed:', (err as Error).message)
           }
@@ -123,8 +125,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       if (uniqueFiles.length > 0) {
         setImmediate(async () => {
           try {
+            const repoPathRow = await pool.query<{ repo_path: string | null }>('SELECT repo_path FROM repos WHERE repo_id = $1', [repoId])
+            const repoPath = repoPathRow.rows[0]?.repo_path ?? undefined
             const entry = await getOrLoadRepo(repoId, branch)
-            await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch)
+            await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch, repoPath)
           } catch (err) {
             console.error('[webhook:azure] Incremental index failed:', (err as Error).message)
           }

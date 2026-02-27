@@ -301,43 +301,43 @@ async function runFullIndex(
 ): Promise<void> {
   let resolvedPath = repoPath
 
-  // Auto-clone if no repoPath provided
-  if (!resolvedPath) {
-    if (!repoUrl) {
-      const errMsg = 'Cannot index: repoUrl is required for auto-cloning'
-      for (const branch of indexBranches) setProgress(`${repoId}:${branch}`, { step: 'error', message: errMsg })
-      return
-    }
-    try {
-      mkdirSync(REPOS_DIR, { recursive: true })
-    } catch { /* already exists */ }
+  // Determine clone directory: use stored path or derive from REPOS_DIR
+  const cloneDir = resolvedPath ?? `${REPOS_DIR}/${repoId}`
 
-    for (const branch of indexBranches) {
-      setProgress(`${repoId}:${branch}`, { step: 'parsing', progress: 0, total: 0, file: `Cloning ${repoUrl}...` })
-    }
-
-    const cloneDir = `${REPOS_DIR}/${repoId}`
-    try {
-      if (!existsSync(cloneDir)) {
-        const cloneUrl = buildAuthenticatedUrl(repoUrl, token ?? null)
-        console.log(`[repos] Auto-cloning ${repoUrl} → ${cloneDir}`)
-        await execAsync(`git clone --depth=1 "${cloneUrl}" "${cloneDir}"`, { timeout: 300_000 })
-      } else {
-        // Pull latest on the current branch
-        console.log(`[repos] Pulling latest in ${cloneDir}`)
-        await execAsync(`git -C "${cloneDir}" pull --ff-only`, { timeout: 120_000 })
-      }
-    } catch (err) {
-      const errMsg = `Clone failed: ${(err as Error).message.split('\n')[0]}`
-      console.error(`[repos] ${errMsg}`)
-      for (const branch of indexBranches) setProgress(`${repoId}:${branch}`, { step: 'error', message: errMsg })
-      return
-    }
-
-    resolvedPath = cloneDir
-    // Persist the resolved path so reindex can reuse it
-    await pool.query('UPDATE repos SET repo_path = $1 WHERE repo_id = $2', [resolvedPath, repoId])
+  if (!repoUrl && !resolvedPath) {
+    const errMsg = 'Cannot index: repoUrl is required for auto-cloning'
+    for (const branch of indexBranches) setProgress(`${repoId}:${branch}`, { step: 'error', message: errMsg })
+    return
   }
+
+  try {
+    mkdirSync(REPOS_DIR, { recursive: true })
+  } catch { /* already exists */ }
+
+  for (const branch of indexBranches) {
+    setProgress(`${repoId}:${branch}`, { step: 'parsing', progress: 0, total: 0, file: `Cloning ${repoUrl}...` })
+  }
+
+  try {
+    if (!existsSync(cloneDir)) {
+      const cloneUrl = buildAuthenticatedUrl(repoUrl!, token ?? null)
+      console.log(`[repos] Auto-cloning ${repoUrl} → ${cloneDir}`)
+      await execAsync(`git clone --depth=1 "${cloneUrl}" "${cloneDir}"`, { timeout: 300_000 })
+    } else {
+      // Pull latest — always refresh before indexing
+      console.log(`[repos] Pulling latest in ${cloneDir}`)
+      await execAsync(`git -C "${cloneDir}" fetch --depth=1 origin && git -C "${cloneDir}" reset --hard origin/HEAD`, { timeout: 120_000 })
+    }
+  } catch (err) {
+    const errMsg = `Clone/pull failed: ${(err as Error).message.split('\n')[0]}`
+    console.error(`[repos] ${errMsg}`)
+    for (const branch of indexBranches) setProgress(`${repoId}:${branch}`, { step: 'error', message: errMsg })
+    return
+  }
+
+  resolvedPath = cloneDir
+  // Persist the resolved path so reindex can reuse it
+  await pool.query('UPDATE repos SET repo_path = $1 WHERE repo_id = $2', [resolvedPath, repoId])
 
   if (!existsSync(resolvedPath)) {
     const errMsg = `repoPath does not exist: ${resolvedPath}`

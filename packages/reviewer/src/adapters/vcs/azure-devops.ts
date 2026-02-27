@@ -154,6 +154,8 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     let totalDeletions = 0;
 
     for (const change of changesData.changeEntries || []) {
+      // Azure returns null path for some deleted/folder entries — skip them
+      if (!change.item?.path) continue;
       const status = this.mapChangeType(change.changeType);
       const diffContent = await this.getFileDiff(change.item.path, sourceCommit, targetCommit, status);
 
