@@ -1,4 +1,0 @@
-tls:
-  certificates:
-    - certFile: /etc/nginx/ssl/yourdomain_combined.crt
-      keyFile: /etc/nginx/ssl/yourdomain.key
