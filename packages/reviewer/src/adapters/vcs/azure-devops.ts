@@ -32,8 +32,8 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   private repository: string;
   private token: string;
   private baseUrl: string;
-  /** When true, getDiff compares latest iteration vs previous iteration (webhook re-push mode) */
-  incrementalFromPreviousIteration = false;
+  /** When set, getDiff compares latest iteration vs this iteration ID. 0 = full diff. */
+  compareToIteration?: number;
 
   constructor(config: AzureDevOpsConfig) {
     this.organization = config.organization;
@@ -41,6 +41,16 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     this.repository = config.repository;
     this.token = config.token;
     this.baseUrl = config.baseUrl || 'https://dev.azure.com';
+  }
+
+  async getLatestIterationId(prId: string | number): Promise<number> {
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/iterations?api-version=7.0`
+    );
+    const response = await fetch(url, { headers: this.getAuthHeaders() });
+    if (!response.ok) throw new Error(`Failed to fetch iterations: ${response.statusText}`);
+    const data = await response.json() as { value: Array<{ id: number }> };
+    return data.value[data.value.length - 1]?.id ?? 0;
   }
 
   private getAuthHeaders(): Record<string, string> {
@@ -129,10 +139,8 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       ?? '';
 
     // compareTo=0: full cumulative diff (PR created / manual trigger)
-    // compareTo=latest.id-1: only the new commits since the previous push
-    const compareTo = this.incrementalFromPreviousIteration && latest.id > 1
-      ? latest.id - 1
-      : 0;
+    // compareTo=N: only the delta between iteration N and latest
+    const compareTo = this.compareToIteration ?? 0;
     const changesUrl = this.getGitApiUrl(
       `/repositories/${this.repository}/pullrequests/${prId}/iterations/${latest.id}/changes?$compareTo=${compareTo}&api-version=7.0`
     );
