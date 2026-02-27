@@ -145,6 +145,15 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       `/repositories/${this.repository}/pullrequests/${prId}/iterations/${latest.id}/changes?$compareTo=${compareTo}&api-version=7.0`
     );
 
+    // For incremental reviews: use the previous iteration's source commit as the "old" side
+    // of each file diff. Without this, getFileDiff always compares against the original PR
+    // base (targetCommit), producing a cumulative diff that causes the LLM to re-comment on
+    // code already reviewed in earlier iterations.
+    const prevIteration = compareTo > 0
+      ? iterations.value.find(it => it.id === compareTo)
+      : undefined;
+    const effectiveOldCommit = prevIteration?.sourceRefCommit?.commitId ?? targetCommit;
+
     const changesResponse = await fetch(changesUrl, { headers: this.getAuthHeaders() });
     if (!changesResponse.ok) {
       throw new Error(`Failed to fetch PR changes: ${changesResponse.statusText}`);
@@ -165,7 +174,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       // Azure returns null path for some deleted/folder entries — skip them
       if (!change.item?.path) continue;
       const status = this.mapChangeType(change.changeType);
-      const diffContent = await this.getFileDiff(change.item.path, sourceCommit, targetCommit, status);
+      const diffContent = await this.getFileDiff(change.item.path, sourceCommit, effectiveOldCommit, status);
 
       files.push({
         path: change.item.path,
@@ -499,7 +508,6 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   async submitReview(prId: string | number, review: Review): Promise<void> {
-    // Post summary as a comment
     const summaryUrl = this.getGitApiUrl(
       `/repositories/${this.repository}/pullrequests/${prId}/threads?api-version=7.0`
     );
@@ -510,9 +518,23 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       comment: '💬'
     };
 
-    // Post all inline comments
+    // Build a map of existing AgnusAI threads: "path:line" → { threadId, commentId }
+    // so we can UPDATE instead of creating duplicate threads on the same line.
+    const existingMap = await this.getAgnusThreadMap(prId);
+
+    // Post or update inline comments
     for (const comment of review.comments) {
-      await this.addInlineComment(prId, comment.path, comment.line, comment.body, comment.severity);
+      const filePath = comment.path.startsWith('/') ? comment.path : `/${comment.path}`;
+      const key = `${filePath}:${comment.line}`;
+      const existing = existingMap.get(key);
+
+      if (existing) {
+        // Update the existing thread's comment with the new finding
+        console.log(`[azure-adapter] Updating existing thread ${existing.threadId} at ${key}`);
+        await this.updateThreadComment(prId, existing.threadId, existing.commentId, comment.body);
+      } else {
+        await this.addInlineComment(prId, comment.path, comment.line, comment.body, comment.severity);
+      }
     }
 
     // Post summary
@@ -548,6 +570,72 @@ export class AzureDevOpsAdapter implements VCSAdapter {
           vote: voteMap[review.verdict]
         })
       });
+    }
+  }
+
+  /**
+   * Fetch existing AgnusAI inline threads and return a map of "filePath:line" → { threadId, commentId }.
+   * Identifies our threads by the "Was this helpful?" feedback link pattern.
+   */
+  private async getAgnusThreadMap(prId: string | number): Promise<Map<string, { threadId: number; commentId: number }>> {
+    const map = new Map<string, { threadId: number; commentId: number }>();
+    try {
+      const url = this.getGitApiUrl(
+        `/repositories/${this.repository}/pullrequests/${prId}/threads?api-version=7.0`
+      );
+      const response = await fetch(url, { headers: this.getAuthHeaders() });
+      if (!response.ok) return map;
+
+      const data = await response.json() as {
+        value: Array<{
+          id: number;
+          threadContext?: { filePath?: string; rightFileStart?: { line: number } };
+          comments: Array<{ id: number; content: string }>;
+          isDeleted?: boolean;
+        }>;
+      };
+
+      for (const thread of data.value || []) {
+        if (thread.isDeleted) continue;
+        const ctx = thread.threadContext;
+        if (!ctx?.filePath || !ctx.rightFileStart?.line) continue;
+
+        // Check if the first comment looks like an AgnusAI comment
+        const firstComment = thread.comments?.[0];
+        if (!firstComment) continue;
+        const body = firstComment.content || '';
+        if (!body.includes('Was this helpful?') && !body.includes('**Suggestion:**')) continue;
+
+        const key = `${ctx.filePath}:${ctx.rightFileStart.line}`;
+        // Keep the most recent thread if multiple exist on the same line
+        map.set(key, { threadId: thread.id, commentId: firstComment.id });
+      }
+    } catch (err) {
+      console.warn('[azure-adapter] Failed to fetch existing threads for dedup:', (err as Error).message);
+    }
+    return map;
+  }
+
+  /**
+   * Update an existing thread comment's body (PATCH).
+   */
+  private async updateThreadComment(
+    prId: string | number,
+    threadId: number,
+    commentId: number,
+    newBody: string
+  ): Promise<void> {
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments/${commentId}?api-version=7.0`
+    );
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ content: newBody })
+    });
+    if (!response.ok) {
+      console.error(`[azure-adapter] Failed to update thread ${threadId} comment ${commentId}: ${response.statusText}`);
+      // Fallback: don't throw — we'll just have a duplicate, which is better than crashing the review
     }
   }
 

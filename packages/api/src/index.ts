@@ -293,6 +293,12 @@ async function main() {
       PRIMARY KEY (repo_id, pr_number, platform)
     )
   `)
+  // Safety net: ensure unique constraint exists even if the table was created by an older migration
+  // without the PRIMARY KEY — ON CONFLICT requires it for the UPSERT in saveLastReviewedIteration
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS pr_review_state_uq
+    ON pr_review_state (repo_id, pr_number, platform)
+  `)
   app.log.info('Database schema migrated')
   await seedAdminUser(pool)
 
