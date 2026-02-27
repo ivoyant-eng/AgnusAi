@@ -110,8 +110,10 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
         return { verdict: 'comment', commentCount: 0, reviewId: '' }
       }
       azureAdapter!.compareToIteration = lastReviewedNow  // 0 = full diff on first review
+      console.log(`[review-runner] Azure PR ${prNumber}: reviewing iteration ${latestIteration}, compareToIteration=${lastReviewedNow}`)
       const result = await executeReview(opts, vcs, pool)
       await saveLastReviewedIteration(pool, repoId, prNumber, latestIteration)
+      console.log(`[review-runner] Azure PR ${prNumber}: saved last_reviewed_iteration=${latestIteration}`)
       return result
     })
   }
@@ -124,8 +126,9 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     try {
       const latestIteration = await azureAdapter.getLatestIterationId(prNumber)
       await saveLastReviewedIteration(pool, repoId, prNumber, latestIteration)
+      console.log(`[review-runner] Azure PR ${prNumber} (created): saved last_reviewed_iteration=${latestIteration}`)
     } catch (err) {
-      console.warn('[review-runner] Failed to save Azure iteration state:', (err as Error).message)
+      console.error(`[review-runner] Azure PR ${prNumber} (created): FAILED to save iteration state:`, (err as Error).message)
     }
   }
 
