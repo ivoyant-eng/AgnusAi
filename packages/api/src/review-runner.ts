@@ -14,6 +14,42 @@ import { getRepo } from './graph-cache'
 import { createEmbeddingAdapter } from './embedding-factory'
 import type { GraphReviewContext } from '@agnus-ai/shared'
 
+// Sequential per-PR lock — prevents concurrent webhooks posting duplicate comments
+const prReviewLocks = new Map<string, Promise<void>>()
+
+async function withPRLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const current = prReviewLocks.get(key) ?? Promise.resolve()
+  let release!: () => void
+  const next = new Promise<void>(r => { release = r })
+  prReviewLocks.set(key, next)
+  try {
+    await current
+    return await fn()
+  } finally {
+    release()
+    if (prReviewLocks.get(key) === next) prReviewLocks.delete(key)
+  }
+}
+
+async function getLastReviewedIteration(pool: Pool, repoId: string, prNumber: number): Promise<number> {
+  const res = await pool.query<{ last_reviewed_iteration: number }>(
+    `SELECT last_reviewed_iteration FROM pr_review_state
+     WHERE repo_id = $1 AND pr_number = $2 AND platform = 'azure'`,
+    [repoId, prNumber],
+  )
+  return res.rows[0]?.last_reviewed_iteration ?? 0
+}
+
+async function saveLastReviewedIteration(pool: Pool, repoId: string, prNumber: number, iteration: number): Promise<void> {
+  await pool.query(
+    `INSERT INTO pr_review_state (repo_id, pr_number, platform, last_reviewed_iteration, updated_at)
+     VALUES ($1, $2, 'azure', $3, NOW())
+     ON CONFLICT (repo_id, pr_number, platform)
+     DO UPDATE SET last_reviewed_iteration = $3, updated_at = NOW()`,
+    [repoId, prNumber, iteration],
+  )
+}
+
 export interface ReviewRunOptions {
   platform: 'github' | 'azure'
   repoId: string
@@ -22,7 +58,7 @@ export interface ReviewRunOptions {
   token?: string
   baseBranch: string
   pool: Pool
-  /** Azure only: if true, diffs only the new commits since the previous push (webhook re-push mode) */
+  /** Azure only: if true, gates on iteration DB state and diffs only new commits since last reviewed iteration */
   incrementalDiff?: boolean
   /** GitHub only: if true, uses checkpoint-based incremental review (only new commits since last review) */
   incrementalReview?: boolean
@@ -31,10 +67,11 @@ export interface ReviewRunOptions {
 }
 
 export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; comments?: any[] }> {
-  const { platform, repoId, repoUrl, prNumber, token, baseBranch, pool } = opts
+  const { platform, repoId, repoUrl, prNumber, token, pool } = opts
 
-  // Build VCS adapter
-  let vcs
+  // 1. Build VCS adapter
+  let vcs: any
+  let azureAdapter: AzureDevOpsAdapter | undefined
   if (platform === 'github') {
     if (!token) throw new Error('GitHub token required for review')
     // https://github.com/{owner}/{repo}
@@ -51,10 +88,52 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     const organization = parts[0] ?? ''
     const project = parts[1] ?? ''
     const repository = parts[parts.length - 1] ?? ''
-    const azureAdapter = new AzureDevOpsAdapter({ organization, project, repository, token })
-    if (opts.incrementalDiff) azureAdapter.incrementalFromPreviousIteration = true
+    azureAdapter = new AzureDevOpsAdapter({ organization, project, repository, token })
     vcs = azureAdapter
   }
+
+  // 2. Azure incremental gate — skip non-commit events, diff only new commits since last review
+  if (opts.incrementalDiff && azureAdapter) {
+    const latestIteration = await azureAdapter.getLatestIterationId(prNumber)
+    const lastReviewed = await getLastReviewedIteration(pool, repoId, prNumber)
+
+    if (latestIteration <= lastReviewed) {
+      console.log(`[review-runner] Azure PR ${prNumber}: iteration ${latestIteration} already reviewed — skipping`)
+      return { verdict: 'comment', commentCount: 0, reviewId: '' }
+    }
+
+    return withPRLock(`${repoId}:${prNumber}`, async () => {
+      // Re-check inside lock — a concurrent webhook may have just reviewed
+      const lastReviewedNow = await getLastReviewedIteration(pool, repoId, prNumber)
+      if (latestIteration <= lastReviewedNow) {
+        console.log(`[review-runner] Azure PR ${prNumber}: already reviewed after lock — skipping`)
+        return { verdict: 'comment', commentCount: 0, reviewId: '' }
+      }
+      azureAdapter!.compareToIteration = lastReviewedNow  // 0 = full diff on first review
+      const result = await executeReview(opts, vcs, pool)
+      await saveLastReviewedIteration(pool, repoId, prNumber, latestIteration)
+      return result
+    })
+  }
+
+  // 3. GitHub + non-incremental Azure (created events)
+  const result = await executeReview(opts, vcs, pool)
+
+  // 4. Save iteration for Azure created event so the first updated event is correctly gated
+  if (platform === 'azure' && azureAdapter && !opts.dryRun) {
+    try {
+      const latestIteration = await azureAdapter.getLatestIterationId(prNumber)
+      await saveLastReviewedIteration(pool, repoId, prNumber, latestIteration)
+    } catch (err) {
+      console.warn('[review-runner] Failed to save Azure iteration state:', (err as Error).message)
+    }
+  }
+
+  return result
+}
+
+async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; comments?: any[] }> {
+  const { platform, repoId, prNumber, baseBranch } = opts
 
   const config: Config = {
     vcs: {},

@@ -107,16 +107,6 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       // On re-push, only diff the new commits (latest vs previous iteration)
       const incrementalDiff = eventType === 'git.pullrequest.updated'
 
-      // For updated events, only trigger if there are new commits.
-      // Azure fires git.pullrequest.updated for reviewer add/remove, vote changes,
-      // policy status updates, title/description edits — none of which warrant a review.
-      if (incrementalDiff) {
-        const commits = (payload.resource as any)?.commits as unknown[] | undefined
-        if (!commits || commits.length === 0) {
-          return reply.status(200).send({ ok: true })
-        }
-      }
-
       setImmediate(async () => {
         try {
           await runReview({
