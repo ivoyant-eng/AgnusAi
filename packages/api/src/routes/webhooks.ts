@@ -42,30 +42,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(200).send({ ok: true })
       }
 
-      const commits = (payload.commits as any[]) ?? []
-      const changedFiles: string[] = []
-      for (const commit of commits) {
-        changedFiles.push(...(commit.added ?? []))
-        changedFiles.push(...(commit.modified ?? []))
-        changedFiles.push(...(commit.removed ?? []))
-      }
-      const uniqueFiles = [...new Set(changedFiles)]
-
-      if (uniqueFiles.length > 0) {
-        setImmediate(async () => {
-          try {
-            const repoPathRow = await pool.query<{ repo_path: string | null }>('SELECT repo_path FROM repos WHERE repo_id = $1', [repoId])
-            const repoPath = repoPathRow.rows[0]?.repo_path ?? undefined
-            if (repoPath) {
-              await execAsync(`git -C "${repoPath}" fetch --depth=1 origin && git -C "${repoPath}" reset --hard origin/HEAD`, { timeout: 60_000 })
-            }
-            const entry = await getOrLoadRepo(repoId, branch)
-            await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch, repoPath)
-          } catch (err) {
-            console.error('[webhook] Incremental index failed:', (err as Error).message)
-          }
-        })
-      }
+      setImmediate(() => runPushIndex(pool, repoId, branch, '[webhook]'))
     } else if (event === 'pull_request') {
       const action = payload.action as string
       if (action === 'opened' || action === 'synchronize') {
@@ -119,31 +96,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         return reply.status(200).send({ ok: true })
       }
 
-      const commits = (payload.resource as any)?.commits as any[] ?? []
-      const changedFiles: string[] = []
-      for (const commit of commits) {
-        const changes = commit.changes ?? []
-        for (const change of changes) {
-          changedFiles.push(change.item?.path?.replace(/^\//, '') ?? '')
-        }
-      }
-      const uniqueFiles = [...new Set(changedFiles.filter(Boolean))]
-
-      if (uniqueFiles.length > 0) {
-        setImmediate(async () => {
-          try {
-            const repoPathRow = await pool.query<{ repo_path: string | null }>('SELECT repo_path FROM repos WHERE repo_id = $1', [repoId])
-            const repoPath = repoPathRow.rows[0]?.repo_path ?? undefined
-            if (repoPath) {
-              await execAsync(`git -C "${repoPath}" fetch --depth=1 origin && git -C "${repoPath}" reset --hard origin/HEAD`, { timeout: 60_000 })
-            }
-            const entry = await getOrLoadRepo(repoId, branch)
-            await entry.indexer.incrementalUpdate(uniqueFiles, repoId, branch, repoPath)
-          } catch (err) {
-            console.error('[webhook:azure] Incremental index failed:', (err as Error).message)
-          }
-        })
-      }
+      setImmediate(() => runPushIndex(pool, repoId, branch, '[webhook:azure]'))
     } else if (
       eventType === 'git.pullrequest.created' ||
       eventType === 'git.pullrequest.updated'
@@ -197,6 +150,86 @@ async function getRepoToken(pool: Pool, repoId: string): Promise<string | undefi
     [repoId],
   )
   return res.rows[0]?.token ?? undefined
+}
+
+/**
+ * Pull the clone and return files changed since the previous HEAD via git diff.
+ * Works for both GitHub and Azure — no payload file list needed.
+ */
+async function getChangedFilesFromGit(repoPath: string): Promise<string[]> {
+  try {
+    await execAsync(
+      `git -C "${repoPath}" fetch --depth=1 origin && git -C "${repoPath}" reset --hard origin/HEAD`,
+      { timeout: 60_000 },
+    )
+    const { stdout } = await execAsync(
+      `git -C "${repoPath}" diff --name-only ORIG_HEAD HEAD 2>/dev/null`,
+      { timeout: 30_000 },
+    )
+    return stdout.trim().split('\n').filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Shared push-index handler for GitHub and Azure git.push events.
+ * - If no symbols exist yet → full index (fallback for unindexed repos)
+ * - Otherwise → incremental update of only the changed files
+ */
+async function runPushIndex(pool: Pool, repoId: string, branch: string, logPrefix: string): Promise<void> {
+  try {
+    const repoPathRow = await pool.query<{ repo_path: string | null }>(
+      'SELECT repo_path FROM repos WHERE repo_id = $1', [repoId],
+    )
+    const repoPath = repoPathRow.rows[0]?.repo_path ?? undefined
+    if (!repoPath) {
+      console.warn(`${logPrefix} No repo_path for ${repoId} — skipping index`)
+      return
+    }
+
+    // Check if an index exists
+    const { rows } = await pool.query<{ cnt: string }>(
+      'SELECT COUNT(*) as cnt FROM symbols WHERE repo_id = $1', [repoId],
+    )
+    const symbolCount = parseInt(rows[0]?.cnt ?? '0')
+
+    if (symbolCount === 0) {
+      // No index yet — pull and run full index as fallback
+      console.log(`${logPrefix} No symbols for ${repoId}, running full index`)
+      await execAsync(
+        `git -C "${repoPath}" fetch --depth=1 origin && git -C "${repoPath}" reset --hard origin/HEAD`,
+        { timeout: 60_000 },
+      )
+      const entry = await getOrLoadRepo(repoId, branch)
+      const stats = await entry.indexer.fullIndex(repoPath, repoId, branch)
+      await pool.query(
+        'UPDATE repos SET indexed_at = NOW(), symbol_count = $1 WHERE repo_id = $2',
+        [stats.symbolCount, repoId],
+      )
+      console.log(`${logPrefix} Full index complete: ${stats.symbolCount} symbols`)
+    } else {
+      // Incremental — pull and diff to find changed files
+      const changedFiles = await getChangedFilesFromGit(repoPath)
+      if (changedFiles.length === 0) {
+        console.log(`${logPrefix} No changed files detected for ${repoId}`)
+        return
+      }
+      console.log(`${logPrefix} Incremental update for ${repoId}: ${changedFiles.join(', ')}`)
+      const entry = await getOrLoadRepo(repoId, branch)
+      await entry.indexer.incrementalUpdate(changedFiles, repoId, branch, repoPath)
+      // Keep symbol_count in sync
+      const { rows: countRows } = await pool.query<{ cnt: string }>(
+        'SELECT COUNT(*) as cnt FROM symbols WHERE repo_id = $1', [repoId],
+      )
+      await pool.query(
+        'UPDATE repos SET symbol_count = $1 WHERE repo_id = $2',
+        [parseInt(countRows[0]?.cnt ?? '0'), repoId],
+      )
+    }
+  } catch (err) {
+    console.error(`${logPrefix} Push index failed for ${repoId}:`, (err as Error).message)
+  }
 }
 
 /**
