@@ -33,6 +33,7 @@ export {
 export * from './types';
 export { filterByConfidence, DEFAULT_PRECISION_CONFIG } from './review/precision-filter';
 export type { PrecisionFilterConfig, FilteredByConfidence } from './review/precision-filter';
+export { runReviewWithSpecialists } from './review/multi-agent';
 
 import { VCSAdapter } from './adapters/vcs/base';
 import { TicketAdapter } from './adapters/ticket/base';
@@ -47,6 +48,7 @@ import {
   generateCheckpointComment,
 } from './review/checkpoint';
 import { filterByConfidence } from './review/precision-filter';
+import { runReviewWithSpecialists } from './review/multi-agent';
 
 /**
  * Result of an incremental review check
@@ -215,8 +217,10 @@ export class PRReviewAgent {
       graphContext,
     };
 
-    // Run review
-    const result = await this.llm.generateReview(context);
+    // Run review (single-agent or specialist orchestration)
+    const result =
+      (await runReviewWithSpecialists(this.llm, context)) ??
+      (await this.llm.generateReview(context));
 
     // Precision filter
     const threshold = this.config.review?.precisionThreshold ?? 0.7;
@@ -323,8 +327,10 @@ export class PRReviewAgent {
       graphContext,
     };
 
-    // 5. Run review
-    const result = await this.llm.generateReview(context);
+    // 5. Run review (single-agent or specialist orchestration)
+    const result =
+      (await runReviewWithSpecialists(this.llm, context)) ??
+      (await this.llm.generateReview(context));
 
     // 6. Precision filter — drop low-confidence comments
     const threshold = this.config.review?.precisionThreshold ?? 0.7;

@@ -16,7 +16,9 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateText } from 'ai';
 import { BaseLLMBackend } from './base';
-import { ReviewContext } from '../types';
+import { ReviewContext, ReviewResult } from '../types';
+import { buildReviewPrompt } from './prompt';
+import { parseReviewResponse } from './parser';
 
 export type ProviderName = 'ollama' | 'openai' | 'azure' | 'claude' | 'custom';
 
@@ -53,6 +55,17 @@ export class UnifiedLLMBackend extends BaseLLMBackend {
       prompt,
     });
     return text;
+  }
+
+  override async generateReview(context: ReviewContext): Promise<ReviewResult> {
+    const prompt = buildReviewPrompt(context);
+    const { text, usage } = await generateText({
+      model: this.languageModel,
+      prompt,
+    });
+    const result = parseReviewResponse(text);
+    const tokensUsed = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+    return { ...result, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
   }
 }
 
