@@ -6,6 +6,8 @@ export { VCSAdapter } from './adapters/vcs/base';
 
 export { JiraAdapter } from './adapters/ticket/jira';
 export { LinearAdapter } from './adapters/ticket/linear';
+export { AzureBoardsAdapter } from './adapters/ticket/azure-boards';
+export { GitHubIssuesAdapter } from './adapters/ticket/github-issues';
 export { TicketAdapter } from './adapters/ticket/base';
 
 export { OllamaBackend, createOllamaBackend } from './llm/ollama';
