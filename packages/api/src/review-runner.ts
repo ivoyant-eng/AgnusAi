@@ -4,7 +4,7 @@
  */
 import crypto from 'crypto'
 import path from 'path'
-import { PRReviewAgent, GitHubAdapter, AzureDevOpsAdapter, createBackendFromEnv } from '@agnus-ai/reviewer'
+import { PRReviewAgent, GitHubAdapter, AzureDevOpsAdapter, createBackendFromEnv, JiraAdapter, LinearAdapter, AzureBoardsAdapter, GitHubIssuesAdapter } from '@agnus-ai/reviewer'
 import type { Config } from '@agnus-ai/reviewer'
 import type { Pool } from 'pg'
 
@@ -262,6 +262,45 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
   const agent = new PRReviewAgent(config)
   agent.setVCS(vcs)
   agent.setLLM(llm)
+
+  // Wire ticket adapter based on TICKET_PROVIDER env var
+  const ticketProvider = process.env.TICKET_PROVIDER?.toLowerCase()
+  if (ticketProvider === 'jira') {
+    const { JIRA_URL, JIRA_TOKEN, JIRA_EMAIL, JIRA_AC_FIELD } = process.env
+    if (JIRA_URL && JIRA_TOKEN && JIRA_EMAIL) {
+      agent.addTicketAdapter(new JiraAdapter({ url: JIRA_URL, token: JIRA_TOKEN, email: JIRA_EMAIL, acceptanceCriteriaField: JIRA_AC_FIELD }))
+      console.log('[review-runner] Jira ticket adapter registered')
+    } else {
+      console.warn('[review-runner] TICKET_PROVIDER=jira but JIRA_URL/JIRA_TOKEN/JIRA_EMAIL not set — skipping')
+    }
+  } else if (ticketProvider === 'linear') {
+    const { LINEAR_API_KEY } = process.env
+    if (LINEAR_API_KEY) {
+      agent.addTicketAdapter(new LinearAdapter({ apiKey: LINEAR_API_KEY }))
+      console.log('[review-runner] Linear ticket adapter registered')
+    } else {
+      console.warn('[review-runner] TICKET_PROVIDER=linear but LINEAR_API_KEY not set — skipping')
+    }
+  } else if (ticketProvider === 'azure-boards') {
+    const { AZURE_BOARDS_ORG, AZURE_BOARDS_PROJECT, AZURE_BOARDS_TOKEN } = process.env
+    if (AZURE_BOARDS_ORG && AZURE_BOARDS_PROJECT && AZURE_BOARDS_TOKEN) {
+      agent.addTicketAdapter(new AzureBoardsAdapter({ organization: AZURE_BOARDS_ORG, project: AZURE_BOARDS_PROJECT, token: AZURE_BOARDS_TOKEN }))
+      console.log('[review-runner] Azure Boards ticket adapter registered')
+    } else {
+      console.warn('[review-runner] TICKET_PROVIDER=azure-boards but AZURE_BOARDS_ORG/PROJECT/TOKEN not set — skipping')
+    }
+  } else if (ticketProvider === 'github-issues') {
+    const { GITHUB_ISSUES_REPO, GITHUB_TOKEN } = process.env
+    if (GITHUB_ISSUES_REPO && GITHUB_TOKEN) {
+      const [owner, repo] = GITHUB_ISSUES_REPO.split('/')
+      if (owner && repo) {
+        agent.addTicketAdapter(new GitHubIssuesAdapter({ owner, repo, token: GITHUB_TOKEN }))
+        console.log('[review-runner] GitHub Issues ticket adapter registered')
+      }
+    } else {
+      console.warn('[review-runner] TICKET_PROVIDER=github-issues but GITHUB_ISSUES_REPO/GITHUB_TOKEN not set — skipping')
+    }
+  }
 
   // Hoist diff to outer scope so it's available for RAG retrieval
   const diffString = await fetchDiffString(vcs, prNumber)
