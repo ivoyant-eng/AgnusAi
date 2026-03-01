@@ -34,6 +34,18 @@ export interface GraphReviewContext {
   semanticNeighbors: ParsedSymbol[]
   priorExamples?: string[]
   rejectedExamples?: string[]
+  enforcedRules?: EnforcedRuleContext[]
+}
+
+export interface EnforcedRuleContext {
+  id: string
+  name: string
+  content: string
+  severity: RuleSeverity
+  category: RuleCategory
+  scopeType: RuleScopeType
+  repoId: string | null
+  pathPattern: string | null
 }
 
 export interface IndexProgress {
@@ -52,6 +64,72 @@ export interface IndexStats {
   edgeCount: number
   fileCount: number
   durationMs: number
+}
+
+export const RULE_CATEGORIES = [
+  'security',
+  'correctness',
+  'quality',
+  'reliability',
+  'performance',
+  'testability',
+  'compliance',
+  'accessibility',
+  'observability',
+  'architecture',
+  'custom',
+] as const
+export type RuleCategory = (typeof RULE_CATEGORIES)[number]
+
+export const RULE_SEVERITIES = ['error', 'warning', 'recommendation'] as const
+export type RuleSeverity = (typeof RULE_SEVERITIES)[number]
+
+export const RULE_SCOPE_TYPES = ['org', 'repo', 'path'] as const
+export type RuleScopeType = (typeof RULE_SCOPE_TYPES)[number]
+
+export const RULE_SOURCES = ['manual', 'imported', 'suggested', 'discovered'] as const
+export type RuleSource = (typeof RULE_SOURCES)[number]
+
+export const RULE_SUGGESTION_STATUSES = ['pending', 'approved', 'dismissed'] as const
+export type RuleSuggestionStatus = (typeof RULE_SUGGESTION_STATUSES)[number]
+
+export const RULE_VIOLATION_STATUSES = ['open', 'resolved', 'merged_with_violation'] as const
+export type RuleViolationStatus = (typeof RULE_VIOLATION_STATUSES)[number]
+
+export interface Rule {
+  id: string
+  orgId: string
+  name: string
+  content: string
+  examples: string | null
+  category: RuleCategory
+  severity: RuleSeverity
+  enabled: boolean
+  scopeType: RuleScopeType
+  repoId: string | null
+  pathPattern: string | null
+  source: RuleSource
+  createdBy: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RuleSuggestion {
+  id: string
+  orgId: string
+  name: string
+  content: string
+  examples: string | null
+  category: RuleCategory
+  severity: RuleSeverity
+  suggestedScopeType: RuleScopeType
+  suggestedRepoId: string | null
+  suggestedPathPattern: string | null
+  evidence: string | null
+  sourceCount: number
+  status: RuleSuggestionStatus
+  createdAt: string
+  updatedAt: string
 }
 
 export const USER_ROLES = ['admin', 'member'] as const
