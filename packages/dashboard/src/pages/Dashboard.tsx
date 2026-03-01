@@ -1,10 +1,7 @@
-import { useState, useEffect } from 'react'
 import useSWR from 'swr'
 import { Link, useNavigate } from 'react-router-dom'
 import { Trash2, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { FeedbackChart } from '@/components/FeedbackChart'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
 interface Repo {
   repoId: string
@@ -41,44 +38,10 @@ const VERDICT_COLOR: Record<string, string> = {
   comment: 'text-muted-foreground',
 }
 
-interface FeedbackMetrics {
-  repoId: string
-  series: Array<{ date: string; accepted: number; rejected: number }>
-  totals: { accepted: number; rejected: number; total: number; acceptanceRate: number | null }
-}
-
-interface PrecisionBucket {
-  bucket: string
-  total: number
-  accepted: number
-  acceptanceRate: number | null
-}
-
 export default function Dashboard() {
   const { data: repos, mutate: mutateRepos } = useSWR<Repo[]>('/api/repos', fetcher, { refreshInterval: 30000 })
   const { data: reviews } = useSWR<Review[]>('/api/reviews', fetcher, { refreshInterval: 30000 })
   const navigate = useNavigate()
-
-  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
-
-  // Default to first repo once repos load
-  useEffect(() => {
-    if (repos && repos.length > 0 && !selectedRepoId) {
-      setSelectedRepoId(repos[0].repoId)
-    }
-  }, [repos, selectedRepoId])
-
-  const { data: metrics } = useSWR<FeedbackMetrics>(
-    selectedRepoId ? `/api/repos/${selectedRepoId}/feedback-metrics` : null,
-    fetcher,
-    { refreshInterval: 60000 },
-  )
-
-  const { data: precisionData } = useSWR<{ buckets: PrecisionBucket[] }>(
-    selectedRepoId ? `/api/repos/${selectedRepoId}/precision` : null,
-    fetcher,
-    { refreshInterval: 60000 },
-  )
 
   const hasData = repos && repos.length > 0
 
@@ -115,16 +78,24 @@ export default function Dashboard() {
             </div>
             <div className="border-t border-border">
               {repos.map((repo, i) => (
-                <div key={repo.repoId} className="flex items-center gap-6 border-b border-border py-5 hover:bg-muted/20 transition-colors">
+                <div
+                  key={repo.repoId}
+                  className="flex items-center gap-6 border-b border-border py-5 hover:bg-muted/20 transition-colors cursor-pointer"
+                  onClick={() => navigate(`/app/repos/${repo.repoId}`)}
+                >
                   <span className="num-display w-8 shrink-0">
                     {String(i + 1).padStart(2, '0')}
                   </span>
 
                   {/* Name + meta */}
                   <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">
+                    <Link
+                      to={`/app/repos/${repo.repoId}`}
+                      className="font-medium truncate block hover:underline"
+                      onClick={e => e.stopPropagation()}
+                    >
                       {repo.repoUrl.replace('https://github.com/', '').replace('https://dev.azure.com/', '')}
-                    </p>
+                    </Link>
                     <p className="label-meta mt-0.5">{repo.platform} · added {formatDate(repo.createdAt)}</p>
                   </div>
 
@@ -135,13 +106,24 @@ export default function Dashboard() {
                   <Link
                     to={`/app/ready/${repo.repoId}`}
                     className="label-meta hover:text-foreground transition-colors underline shrink-0 hidden sm:block"
+                    onClick={e => e.stopPropagation()}
                   >
                     Setup
+                  </Link>
+                  <Link
+                    to={`/app/repos/${repo.repoId}`}
+                    className="label-meta hover:text-foreground transition-colors underline shrink-0 hidden sm:block"
+                    onClick={e => e.stopPropagation()}
+                  >
+                    Analytics
                   </Link>
 
                   {/* Reindex */}
                   <button
-                    onClick={() => handleReindex(repo.repoId)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void handleReindex(repo.repoId)
+                    }}
                     title="Reindex"
                     className="p-1.5 text-muted-foreground hover:text-foreground transition-colors shrink-0"
                   >
@@ -150,7 +132,10 @@ export default function Dashboard() {
 
                   {/* Delete */}
                   <button
-                    onClick={() => handleDelete(repo.repoId, repo.repoUrl)}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      void handleDelete(repo.repoId, repo.repoUrl)
+                    }}
                     title="Delete repo"
                     className="p-1.5 text-muted-foreground hover:text-destructive transition-colors shrink-0"
                   >
@@ -159,59 +144,6 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-          </section>
-
-          {/* Learning Metrics section */}
-          <section>
-            <div className="flex items-center justify-between mb-6">
-              <p className="label-meta">Learning Metrics</p>
-              {repos && repos.length > 1 && (
-                <Select value={selectedRepoId ?? ''} onValueChange={setSelectedRepoId}>
-                  <SelectTrigger className="w-56 h-8 text-xs overflow-hidden">
-                    <span className="truncate min-w-0 flex-1 text-left">
-                      <SelectValue placeholder="Select repo" />
-                    </span>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {repos.map(r => (
-                      <SelectItem key={r.repoId} value={r.repoId}>
-                        <span className="block truncate max-w-[240px]">
-                          {r.repoUrl.replace('https://github.com/', '').replace('https://dev.azure.com/', '')}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
-            {metrics ? (
-              <FeedbackChart series={metrics.series} totals={metrics.totals} />
-            ) : (
-              <div className="border border-border py-12 text-center">
-                <p className="label-meta text-muted-foreground">Loading…</p>
-              </div>
-            )}
-            {precisionData && precisionData.buckets.length > 0 && (
-              <div className="mt-8">
-                <p className="label-meta mb-4">Confidence Calibration</p>
-                <div className="border-t border-border">
-                  <div className="grid grid-cols-3 border-b border-border py-2">
-                    <span className="label-meta">Confidence</span>
-                    <span className="label-meta text-right">Comments</span>
-                    <span className="label-meta text-right">Acceptance</span>
-                  </div>
-                  {precisionData.buckets.map(b => (
-                    <div key={b.bucket} className="grid grid-cols-3 border-b border-border py-3">
-                      <span className="font-mono text-xs">{b.bucket}</span>
-                      <span className="font-mono text-xs text-right">{b.total}</span>
-                      <span className="font-mono text-xs text-right">
-                        {b.acceptanceRate !== null ? `${b.acceptanceRate}%` : '—'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
           </section>
 
           {/* Reviews table */}

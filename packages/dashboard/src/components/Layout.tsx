@@ -6,6 +6,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 const NAV_ITEMS = [
   { href: '/app', label: 'dashboard' },
   { href: '/app/connect', label: 'connect' },
+  { href: '/app/rules', label: 'rules' },
   { href: '/app/settings', label: 'settings' },
 ]
 
