@@ -5,6 +5,12 @@ import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
 import { getOrLoadRepo } from '../graph-cache'
 import { runReview } from '../review-runner'
+import {
+  normalizeGithubEvent,
+  normalizeAzureEvent,
+  markMergedViolations,
+  type PREvent,
+} from '../pr-event'
 
 const execAsync = promisify(exec)
 
@@ -67,76 +73,6 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     return matched?.repo_id ?? null
   }
 
-  const processGithubPR = async (event: string, payload: Record<string, unknown>, repoId: string, repoUrl: string) => {
-    if (event === 'push') {
-      const branch = ((payload.ref as string) ?? '').replace('refs/heads/', '') || 'main'
-      const isBranchIndexed = await isIndexedBranch(pool, repoId, branch)
-      if (!isBranchIndexed) return
-      setImmediate(() => runPushIndex(pool, repoId, branch, '[webhook]'))
-      return
-    }
-    if (event === 'pull_request') {
-      const action = payload.action as string
-      if (action === 'opened' || action === 'synchronize') {
-        const prNumber = (payload.pull_request as any)?.number as number
-        const baseBranch = ((payload.pull_request as any)?.base?.ref as string) ?? 'main'
-        const incrementalReview = action === 'synchronize'
-        setImmediate(async () => {
-          try {
-            await runReview({
-              platform: 'github',
-              repoId,
-              repoUrl,
-              prNumber,
-              baseBranch,
-              token: await getRepoToken(pool, repoId),
-              pool,
-              incrementalReview,
-              prAction: action === 'synchronize' ? 'synchronize' : 'opened',
-            })
-          } catch (err) {
-            console.error('[webhook] Review failed for PR', prNumber, (err as Error).message)
-          }
-        })
-      }
-    }
-  }
-
-  const processAzurePR = async (payload: Record<string, unknown>, repoId: string, repoUrl: string) => {
-    const eventType = payload.eventType as string | undefined
-    if (eventType === 'git.push') {
-      const refUpdates = (payload.resource as any)?.refUpdates as any[] ?? []
-      const branch = ((refUpdates[0]?.name as string) ?? '').replace('refs/heads/', '') || 'main'
-      const isBranchIndexed = await isIndexedBranch(pool, repoId, branch)
-      if (!isBranchIndexed) return
-      setImmediate(() => runPushIndex(pool, repoId, branch, '[webhook:azure]'))
-      return
-    }
-    if (eventType === 'git.pullrequest.created' || eventType === 'git.pullrequest.updated') {
-      const prId = (payload.resource as any)?.pullRequestId as number
-      const targetRef = ((payload.resource as any)?.targetRefName as string) ?? 'refs/heads/main'
-      const baseBranch = targetRef.replace('refs/heads/', '') || 'main'
-      const incrementalDiff = eventType === 'git.pullrequest.updated'
-      setImmediate(async () => {
-        try {
-          await runReview({
-            platform: 'azure',
-            repoId,
-            repoUrl,
-            prNumber: prId,
-            baseBranch,
-            token: await getRepoToken(pool, repoId),
-            pool,
-            incrementalDiff,
-            prAction: eventType === 'git.pullrequest.updated' ? 'updated' : 'created',
-          })
-        } catch (err) {
-          console.error('[webhook:azure] Review failed for PR', prId, (err as Error).message)
-        }
-      })
-    }
-  }
-
   // ─── Multi-org webhook endpoints ───────────────────────────────────────────
   app.post('/api/webhooks/github/:orgSlug', {
     config: { rawBody: true, rateLimit: webhookRateLimit },
@@ -159,7 +95,8 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl, orgSlug)
     if (!repoId) return reply.status(200).send({ ok: true })
-    await processGithubPR(event, payload, repoId, repoUrl)
+    const prEvent = await normalizeGithubEvent(event, payload, repoId, repoUrl, pool)
+    await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
   })
 
@@ -181,7 +118,8 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl, orgSlug)
     if (!repoId) return reply.status(200).send({ ok: true })
-    await processAzurePR(payload, repoId, repoUrl)
+    const prEvent = await normalizeAzureEvent(payload, repoId, repoUrl, pool)
+    await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
   })
 
@@ -190,21 +128,18 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/webhooks/github', {
     config: { rawBody: true, rateLimit: webhookRateLimit },
   }, async (req, reply) => {
-    // Verify signature
     const sig = req.headers['x-hub-signature-256'] as string | undefined
     if (!verifyGitHubSignature(webhookSecret, req.rawBody ?? '', sig)) {
       return reply.status(401).send({ error: 'Invalid signature' })
     }
-
     const event = req.headers['x-github-event'] as string
     const payload = req.body as Record<string, unknown>
-
     const repoUrl = (payload.repository as any)?.html_url as string | undefined
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl)
     if (!repoId) return reply.status(200).send({ ok: true })
-    await processGithubPR(event, payload, repoId, repoUrl)
-
+    const prEvent = await normalizeGithubEvent(event, payload, repoId, repoUrl, pool)
+    await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
   })
 
@@ -220,10 +155,52 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl)
     if (!repoId) return reply.status(200).send({ ok: true })
-    await processAzurePR(payload, repoId, repoUrl)
-
+    const prEvent = await normalizeAzureEvent(payload, repoId, repoUrl, pool)
+    await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
   })
+}
+
+// ─── Dispatch ─────────────────────────────────────────────────────────────────
+
+async function dispatchPREvent(event: PREvent, pool: Pool): Promise<void> {
+  const { kind, platform, repoId, repoUrl } = event
+  switch (kind.type) {
+    case 'skip':
+      console.log(`[webhook:${platform}] Skipping: ${kind.reason}`)
+      return
+
+    case 'push_index':
+      setImmediate(() => runPushIndex(pool, repoId, kind.branch, `[webhook:${platform}]`))
+      return
+
+    case 'pr_merged':
+      await markMergedViolations(pool, repoId, kind.prNumber)
+      return
+
+    case 'pr_review': {
+      const { prNumber, baseBranch, prAction, incrementalDiff, incrementalReview } = kind
+      setImmediate(async () => {
+        try {
+          await runReview({
+            platform,
+            repoId,
+            repoUrl,
+            prNumber,
+            baseBranch,
+            token: await getRepoToken(pool, repoId),
+            pool,
+            incrementalDiff,
+            incrementalReview,
+            prAction,
+          })
+        } catch (err) {
+          console.error(`[webhook:${platform}] Review failed for PR ${prNumber}:`, (err as Error).message)
+        }
+      })
+      return
+    }
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -336,23 +313,5 @@ async function runPushIndex(pool: Pool, repoId: string, branch: string, logPrefi
     }
   } catch (err) {
     console.error(`${logPrefix} Push index failed for ${repoId}:`, (err as Error).message)
-  }
-}
-
-/**
- * Check if a branch is registered in repo_branches.
- * Returns true only if the repo_branches table doesn't exist yet (graceful degradation
- * for deployments that haven't migrated). All other DB errors are re-thrown.
- */
-async function isIndexedBranch(pool: Pool, repoId: string, branch: string): Promise<boolean> {
-  try {
-    const res = await pool.query(
-      'SELECT 1 FROM repo_branches WHERE repo_id = $1 AND branch = $2',
-      [repoId, branch],
-    )
-    return res.rows.length > 0
-  } catch (err: any) {
-    if (err?.code === '42P01') return true // table does not exist — backwards compat
-    throw err
   }
 }
