@@ -53,6 +53,20 @@ export function buildReviewPrompt(context: ReviewContext): string {
     ? `\n## Specialist Role\nRole: ${agentRole}\n${agentDirective ?? ''}\n`
     : '';
 
+  const ticketsSection = (context.tickets && context.tickets.length > 0)
+    ? `\n## Linked Tickets\n` +
+      context.tickets.map(t =>
+        `### ${t.key}: ${t.title}\n` +
+        `- Status: ${t.status}\n` +
+        `- Type: ${t.type}\n` +
+        (t.labels.length > 0 ? `- Labels: ${t.labels.join(', ')}\n` : '') +
+        (t.description ? `\n${t.description.slice(0, 500)}\n` : '') +
+        (t.acceptanceCriteria?.length
+          ? `\n**Acceptance Criteria:**\n${t.acceptanceCriteria.map(c => `- ${c}`).join('\n')}\n`
+          : '')
+      ).join('\n')
+    : '';
+
   return `You are an expert code reviewer. Review this pull request and provide detailed, actionable feedback.
 
 ## PR Information
@@ -62,7 +76,7 @@ Branch: ${pr.sourceBranch} → ${pr.targetBranch}
 
 ## Description
 ${pr.description || 'No description provided.'}
-
+${ticketsSection}
 ## Changed Files (${diff.files.length} files)
 ${fileList}
 
