@@ -13,6 +13,7 @@ AgnusAI went from a single TypeScript script to a full hosted service with a sym
 | [5](./05-hosted-service-monorepo-fastify.md) | Building the Hosted Service: Monorepo, Fastify, and the Dashboard | Full-stack pivot |
 | [6](./06-precision-filter-and-rag-feedback.md) | Signal vs. Noise: Building the Precision Filter and RAG Feedback Loop | Quality improvements |
 | [7](./07-business-implications.md) | Business Implications: Open-Source Moat, ICP, and the Path to Enterprise | GTM, positioning, monetization |
+| [9](./09-multi-agent-architecture.md) | How We Fixed LLM Hallucination and the Context Problem with Multi-Agent Architecture | Multi-agent design, judge pass, specialist agents |
 
 ## Key Themes
 

@@ -30,6 +30,26 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     (req as { user: AuthJwtClaims }).user?.activeOrgId ?? null
   const isSystemAdmin = (req: FastifyRequest | { user: AuthJwtClaims }): boolean =>
     Boolean((req as { user: AuthJwtClaims }).user?.isSystemAdmin)
+  const getAccessibleRepo = async (req: FastifyRequest | { user: AuthJwtClaims }, repoId: string) => {
+    const orgId = activeOrg(req)
+    const { rows } = await pool.query(
+      isSystemAdmin(req) && !orgId
+        ? 'SELECT repo_id, repo_url, platform, indexed_at, symbol_count, created_at, org_id FROM repos WHERE repo_id = $1'
+        : 'SELECT repo_id, repo_url, platform, indexed_at, symbol_count, created_at, org_id FROM repos WHERE repo_id = $1 AND org_id = $2',
+      isSystemAdmin(req) && !orgId ? [repoId] : [repoId, orgId],
+    )
+    return rows[0] as
+      | {
+          repo_id: string
+          repo_url: string
+          platform: 'github' | 'azure'
+          indexed_at: string | null
+          symbol_count: number | null
+          created_at: string
+          org_id: string
+        }
+      | undefined
+  }
 
   /**
    * GET /api/repos — list all registered repos (auth required)
@@ -658,6 +678,280 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
       repoId,
       series: rows.map((r: any) => ({ date: r.date, accepted: r.accepted, rejected: r.rejected })),
       totals: { ...totals, total, acceptanceRate: total > 0 ? +(totals.accepted / total).toFixed(2) : null },
+    })
+  })
+
+  /**
+   * GET /api/repos/:id/reviews — repo-scoped recent reviews (auth required)
+   */
+  app.get('/api/repos/:id/reviews', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { id: repoId } = req.params as { id: string }
+    const repo = await getAccessibleRepo(req, repoId)
+    if (!repo) return reply.status(404).send({ error: 'Repo not found' })
+
+    const { rows } = await pool.query(
+      `SELECT r.id, r.pr_number, r.verdict, r.comment_count, r.created_at,
+              COALESCE(f.accepted, 0)::int AS accepted,
+              COALESCE(f.rejected, 0)::int AS rejected
+       FROM reviews r
+       LEFT JOIN (
+         SELECT rc.review_id,
+                COUNT(*) FILTER (WHERE rf.signal = 'accepted') AS accepted,
+                COUNT(*) FILTER (WHERE rf.signal = 'rejected') AS rejected
+         FROM review_comments rc
+         LEFT JOIN review_feedback rf ON rf.comment_id = rc.id
+         GROUP BY rc.review_id
+       ) f ON f.review_id = r.id
+       WHERE r.repo_id = $1
+       ORDER BY r.created_at DESC
+       LIMIT 50`,
+      [repoId],
+    )
+
+    return reply.send(rows.map((r: any) => ({
+      id: r.id,
+      prNumber: r.pr_number,
+      verdict: r.verdict,
+      commentCount: r.comment_count,
+      accepted: r.accepted,
+      rejected: r.rejected,
+      createdAt: r.created_at,
+    })))
+  })
+
+  /**
+   * GET /api/repos/:id/agent-telemetry — per-agent stats (auth required)
+   */
+  app.get('/api/repos/:id/agent-telemetry', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { id: repoId } = req.params as { id: string }
+    const { days = '30' } = req.query as { days?: string }
+    const daysNum = Number.parseInt(days, 10)
+    const boundedDays = Number.isFinite(daysNum) && daysNum > 0 ? Math.min(daysNum, 365) : 30
+    const repo = await getAccessibleRepo(req, repoId)
+    if (!repo) return reply.status(404).send({ error: 'Repo not found' })
+
+    const totals = await pool.query(
+      `SELECT agent_role,
+              COUNT(*)::int AS runs,
+              ROUND(AVG(duration_ms))::int AS avg_duration_ms,
+              SUM(comment_count)::int AS total_comments,
+              COUNT(*) FILTER (WHERE verdict = 'request_changes')::int AS request_changes_count,
+              COUNT(*) FILTER (WHERE error IS NOT NULL)::int AS error_count,
+              SUM(tokens_used)::bigint AS total_tokens
+       FROM review_agent_telemetry
+       WHERE repo_id = $1
+         AND created_at >= NOW() - ($2::text || ' days')::interval
+       GROUP BY agent_role
+       ORDER BY runs DESC, agent_role ASC`,
+      [repoId, String(boundedDays)],
+    )
+    const trend = await pool.query(
+      `SELECT DATE_TRUNC('day', created_at)::date AS day,
+              agent_role,
+              COUNT(*)::int AS runs
+       FROM review_agent_telemetry
+       WHERE repo_id = $1
+         AND created_at >= NOW() - ($2::text || ' days')::interval
+       GROUP BY DATE_TRUNC('day', created_at), agent_role
+       ORDER BY day ASC, agent_role ASC`,
+      [repoId, String(boundedDays)],
+    )
+
+    return reply.send({
+      repoId,
+      days: boundedDays,
+      agents: totals.rows.map((r: any) => ({
+        role: r.agent_role,
+        runs: r.runs,
+        avgDurationMs: r.avg_duration_ms ?? 0,
+        totalComments: r.total_comments ?? 0,
+        requestChangesCount: r.request_changes_count ?? 0,
+        errorCount: r.error_count ?? 0,
+        totalTokens: r.total_tokens != null ? Number(r.total_tokens) : null,
+      })),
+      trend: trend.rows.map((r: any) => ({
+        date: r.day,
+        role: r.agent_role,
+        runs: r.runs,
+      })),
+    })
+  })
+
+  /**
+   * GET /api/orgs/:orgKey/token-usage — org-wide token usage by date range (auth required)
+   */
+  app.get('/api/orgs/:orgKey/token-usage', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { orgKey } = req.params as { orgKey: string }
+    const { from, to } = req.query as { from?: string; to?: string }
+
+    const orgRes = await pool.query<{ id: string }>('SELECT id FROM organizations WHERE slug = $1', [orgKey])
+    if (orgRes.rows.length === 0) return reply.status(404).send({ error: 'org not found' })
+    const orgId = orgRes.rows[0].id
+
+    const fromDate = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+    const toDate = to ? new Date(to) : new Date()
+    if (isNaN(fromDate.getTime()) || isNaN(toDate.getTime())) {
+      return reply.status(400).send({ error: 'invalid date range' })
+    }
+
+    // Per-agent breakdown
+    const byAgent = await pool.query(
+      `SELECT agent_role,
+              COUNT(*)::int AS runs,
+              COALESCE(SUM(tokens_used), 0)::bigint AS total_tokens,
+              ROUND(AVG(tokens_used))::int AS avg_tokens
+       FROM review_agent_telemetry
+       WHERE org_id = $1
+         AND created_at >= $2
+         AND created_at <= $3
+       GROUP BY agent_role
+       ORDER BY total_tokens DESC`,
+      [orgId, fromDate.toISOString(), toDate.toISOString()],
+    )
+
+    // Per-repo breakdown
+    const byRepo = await pool.query(
+      `SELECT rat.repo_id, r.repo_url,
+              COUNT(*)::int AS runs,
+              COALESCE(SUM(rat.tokens_used), 0)::bigint AS total_tokens
+       FROM review_agent_telemetry rat
+       LEFT JOIN repos r ON r.repo_id = rat.repo_id
+       WHERE rat.org_id = $1
+         AND rat.created_at >= $2
+         AND rat.created_at <= $3
+       GROUP BY rat.repo_id, r.repo_url
+       ORDER BY total_tokens DESC`,
+      [orgId, fromDate.toISOString(), toDate.toISOString()],
+    )
+
+    // Daily totals
+    const daily = await pool.query(
+      `SELECT DATE_TRUNC('day', created_at)::date AS day,
+              COALESCE(SUM(tokens_used), 0)::bigint AS total_tokens,
+              COUNT(*)::int AS runs
+       FROM review_agent_telemetry
+       WHERE org_id = $1
+         AND created_at >= $2
+         AND created_at <= $3
+       GROUP BY DATE_TRUNC('day', created_at)
+       ORDER BY day ASC`,
+      [orgId, fromDate.toISOString(), toDate.toISOString()],
+    )
+
+    const grandTotal = byAgent.rows.reduce((sum: number, r: any) => sum + Number(r.total_tokens), 0)
+
+    return reply.send({
+      orgKey,
+      from: fromDate.toISOString().slice(0, 10),
+      to: toDate.toISOString().slice(0, 10),
+      totalTokens: grandTotal,
+      byAgent: byAgent.rows.map((r: any) => ({
+        role: r.agent_role,
+        runs: r.runs,
+        totalTokens: Number(r.total_tokens),
+        avgTokens: r.avg_tokens ?? 0,
+      })),
+      byRepo: byRepo.rows.map((r: any) => ({
+        repoId: r.repo_id,
+        repoUrl: r.repo_url ?? r.repo_id,
+        runs: r.runs,
+        totalTokens: Number(r.total_tokens),
+      })),
+      daily: daily.rows.map((r: any) => ({
+        date: r.day,
+        totalTokens: Number(r.total_tokens),
+        runs: r.runs,
+      })),
+    })
+  })
+
+  /**
+   * GET /api/repos/:id/analytics — consolidated repo analytics for dashboard detail page (auth required)
+   */
+  app.get('/api/repos/:id/analytics', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { id: repoId } = req.params as { id: string }
+    const repo = await getAccessibleRepo(req, repoId)
+    if (!repo) return reply.status(404).send({ error: 'Repo not found' })
+
+    const reviewTotals = await pool.query<{ total: string; last_30_days: string; avg_comments: string; request_changes: string }>(
+      `SELECT
+         COUNT(*)::text AS total,
+         COUNT(*) FILTER (WHERE created_at >= NOW() - INTERVAL '30 days')::text AS last_30_days,
+         COALESCE(AVG(comment_count), 0)::text AS avg_comments,
+         COUNT(*) FILTER (WHERE verdict = 'request_changes')::text AS request_changes
+       FROM reviews
+       WHERE repo_id = $1`,
+      [repoId],
+    )
+    const feedbackTotals = await pool.query<{ accepted: string; rejected: string }>(
+      `SELECT
+         COUNT(*) FILTER (WHERE rf.signal = 'accepted')::text AS accepted,
+         COUNT(*) FILTER (WHERE rf.signal = 'rejected')::text AS rejected
+       FROM review_feedback rf
+       JOIN review_comments rc ON rc.id = rf.comment_id
+       WHERE rc.repo_id = $1`,
+      [repoId],
+    )
+    const rulesTotals = await pool.query<{ evaluations: string; violations: string; merged: string; passed: string }>(
+      `SELECT
+         (SELECT COUNT(*)::text FROM rule_evaluations WHERE repo_id = $1) AS evaluations,
+         (SELECT COUNT(*)::text FROM rule_violations WHERE repo_id = $1) AS violations,
+         (SELECT COUNT(*)::text FROM rule_violations WHERE repo_id = $1 AND status = 'merged_with_violation') AS merged,
+         (SELECT COUNT(*)::text FROM rule_evaluations WHERE repo_id = $1 AND passed = true) AS passed`,
+      [repoId],
+    )
+    const agentTotals = await pool.query<{ runs: string; avg_duration_ms: string; errors: string }>(
+      `SELECT
+         COUNT(*)::text AS runs,
+         COALESCE(ROUND(AVG(duration_ms)), 0)::text AS avg_duration_ms,
+         COUNT(*) FILTER (WHERE error IS NOT NULL)::text AS errors
+       FROM review_agent_telemetry
+       WHERE repo_id = $1
+         AND created_at >= NOW() - INTERVAL '30 days'`,
+      [repoId],
+    )
+
+    const accepted = parseInt(feedbackTotals.rows[0]?.accepted ?? '0', 10)
+    const rejected = parseInt(feedbackTotals.rows[0]?.rejected ?? '0', 10)
+    const feedbackTotal = accepted + rejected
+    const reviewsTotal = parseInt(reviewTotals.rows[0]?.total ?? '0', 10)
+    const requestChanges = parseInt(reviewTotals.rows[0]?.request_changes ?? '0', 10)
+    const ruleEvaluations = parseInt(rulesTotals.rows[0]?.evaluations ?? '0', 10)
+    const rulePassed = parseInt(rulesTotals.rows[0]?.passed ?? '0', 10)
+
+    return reply.send({
+      repo: {
+        repoId: repo.repo_id,
+        repoUrl: repo.repo_url,
+        platform: repo.platform,
+        indexedAt: repo.indexed_at,
+        symbolCount: repo.symbol_count ?? 0,
+        createdAt: repo.created_at,
+      },
+      reviews: {
+        total: reviewsTotal,
+        last30Days: parseInt(reviewTotals.rows[0]?.last_30_days ?? '0', 10),
+        avgComments: +Number(reviewTotals.rows[0]?.avg_comments ?? '0').toFixed(2),
+        requestChanges,
+        requestChangesRate: reviewsTotal > 0 ? +(requestChanges / reviewsTotal).toFixed(4) : 0,
+      },
+      feedback: {
+        accepted,
+        rejected,
+        total: feedbackTotal,
+        acceptanceRate: feedbackTotal > 0 ? +(accepted / feedbackTotal).toFixed(4) : 0,
+      },
+      rules: {
+        evaluations: ruleEvaluations,
+        violations: parseInt(rulesTotals.rows[0]?.violations ?? '0', 10),
+        mergedViolations: parseInt(rulesTotals.rows[0]?.merged ?? '0', 10),
+        passRate: ruleEvaluations > 0 ? +(rulePassed / ruleEvaluations).toFixed(4) : 0,
+      },
+      agents: {
+        runs30Days: parseInt(agentTotals.rows[0]?.runs ?? '0', 10),
+        avgDurationMs30Days: parseInt(agentTotals.rows[0]?.avg_duration_ms ?? '0', 10),
+        errors30Days: parseInt(agentTotals.rows[0]?.errors ?? '0', 10),
+      },
     })
   })
 }

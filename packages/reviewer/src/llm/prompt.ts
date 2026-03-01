@@ -5,6 +5,8 @@ import { ReviewContext, Diff, ReviewResult } from '../types';
 
 export function buildReviewPrompt(context: ReviewContext): string {
   const { pr, diff, skills, config, graphContext } = context;
+  const agentRole = context.agentRole;
+  const agentDirective = context.agentDirective;
 
   const skillContext = skills.length > 0
     ? `\n## Review Skills Applied\n${skills.map(s => s.content).join('\n\n')}`
@@ -24,6 +26,18 @@ export function buildReviewPrompt(context: ReviewContext): string {
       `Avoid writing comments similar to these — developers on this repo have explicitly marked them as unhelpful.\n\n` +
       graphContext.rejectedExamples.map(e => `---\n${e}`).join('\n\n') + '\n'
     : ''
+  const rulesSection = (graphContext?.enforcedRules?.length)
+    ? `\n## Rule Enforcement Requirements\n` +
+      `These rules are enforced for this PR scope. Check each rule while reviewing.\n` +
+      `If you find a violation tied to one of these rules, include a single line in the comment body exactly as:\n` +
+      `Rule: <rule name>\n\n` +
+      graphContext.enforcedRules.map(rule =>
+        `- Rule: ${rule.name}\n` +
+        `  Category: ${rule.category}\n` +
+        `  Severity: ${rule.severity}\n` +
+        `  Requirement: ${rule.content}`
+      ).join('\n\n') + '\n'
+    : ''
 
   const fileList = diff.files
     .map(f => `- ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`)
@@ -34,6 +48,9 @@ export function buildReviewPrompt(context: ReviewContext): string {
 
   const truncationWarning = diffResult.truncated
     ? `\n⚠️ IMPORTANT: This diff was truncated. You have only seen the first portion (${diffResult.truncatedCount} more files not shown).\nDo NOT reference, guess, or comment on files not shown above.\nReview ONLY what is shown in the diff.\n`
+    : '';
+  const roleSection = agentRole
+    ? `\n## Specialist Role\nRole: ${agentRole}\n${agentDirective ?? ''}\n`
     : '';
 
   return `You are an expert code reviewer. Review this pull request and provide detailed, actionable feedback.
@@ -51,8 +68,8 @@ ${fileList}
 
 ## Diff
 ${diffResult.content}
-${graphSection}${skillContext}${examplesSection}${rejectedSection}
-${truncationWarning}
+${graphSection}${skillContext}${examplesSection}${rejectedSection}${rulesSection}
+${truncationWarning}${roleSection}
 
 ## Review Instructions
 1. Analyse the diff for issues: correctness, security, performance, maintainability

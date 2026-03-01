@@ -88,6 +88,40 @@ Azure embeddings reuse `AZURE_API_VERSION` from the LLM section.
 | `PRECISION_THRESHOLD` | `0.7` | Minimum LLM confidence score (0.0–1.0) required to post a comment. Comments with `[Confidence: X.X]` below this threshold are silently dropped. |
 | `MAX_DIFF_SIZE` | `150000` | Maximum characters of diff sent to the LLM. Increase for large PRs. |
 
+## Multi-Agent Review
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MULTI_AGENT_ENABLED` | `false` | Enable the parallel specialist agent pipeline. |
+| `REVIEW_MODE` | `single` | `single` — original single-agent. `fast` — security + correctness only. `thorough` — all applicable agents. |
+| `AGENT_CONCURRENCY` | `2` | Number of specialist agents that run in parallel. |
+| `ENABLED_AGENTS` | _(all)_ | Comma-separated list to override which agents run, e.g. `security,correctness`. |
+| `JUDGE_ENABLED` | `true` | Run a deduplication/consolidation judge pass after agents complete. |
+| `JUDGE_MODE` | `deterministic` | `deterministic` — keep strongest per-location finding (no extra LLM call). `llm` — LLM judge for final ranking, falls back to deterministic. |
+
+See [Multi-Agent Review](/reference/multi-agent) for full details.
+
+## Rules
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RULES_SYSTEM_ENABLED` | `true` | Enable rule enforcement during reviews. Set to `false` to disable globally. |
+
+See [Rules System](/reference/rules) for full details.
+
+## Rate Limiting
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RATE_LIMIT_ENABLED` | `true` | Enable rate limiting on all endpoints. |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` header for IP detection (set `true` behind a reverse proxy like Traefik/nginx). |
+| `RATE_LIMIT_GLOBAL_MAX` | `300` | Max requests per IP per global window. |
+| `RATE_LIMIT_GLOBAL_WINDOW` | `1 minute` | Global rate limit window. |
+| `RATE_LIMIT_AUTH_MAX` | `20` | Max login/signup attempts per IP per auth window. |
+| `RATE_LIMIT_AUTH_WINDOW` | `1 minute` | Auth rate limit window. |
+| `RATE_LIMIT_WEBHOOK_MAX` | `120` | Max webhook events per IP per webhook window. |
+| `RATE_LIMIT_WEBHOOK_WINDOW` | `1 minute` | Webhook rate limit window. |
+
 ## Server
 
 | Variable | Default | Description |

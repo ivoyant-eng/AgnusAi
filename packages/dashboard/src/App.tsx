@@ -6,6 +6,8 @@ import Connect from '@/pages/Connect'
 import Indexing from '@/pages/Indexing'
 import Ready from '@/pages/Ready'
 import Settings from '@/pages/Settings'
+import Rules from '@/pages/Rules'
+import RepoDetails from '@/pages/RepoDetails'
 import Login from '@/pages/Login'
 import { useAuth } from '@/hooks/useAuth'
 
@@ -80,6 +82,26 @@ export default function App() {
             <AuthGuard>
               <Layout>
                 <Settings />
+              </Layout>
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/app/rules"
+          element={
+            <AuthGuard>
+              <Layout>
+                <Rules />
+              </Layout>
+            </AuthGuard>
+          }
+        />
+        <Route
+          path="/app/repos/:repoId"
+          element={
+            <AuthGuard>
+              <Layout>
+                <RepoDetails />
               </Layout>
             </AuthGuard>
           }

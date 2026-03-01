@@ -16,7 +16,7 @@ export default defineConfig({
     siteTitle: 'AgnusAI',
 
     nav: [
-      { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Guide', link: '/guide/what-is-agnusai' },
       { text: 'Architecture', link: '/architecture/overview' },
       { text: 'API', link: '/api/rest' },
       { text: 'GitHub', link: 'https://github.com/ivoyant-eng/AgnusAi' },
@@ -27,7 +27,6 @@ export default defineConfig({
         text: 'Getting Started',
         items: [
           { text: 'What is AgnusAI?', link: '/guide/what-is-agnusai' },
-          { text: 'Quick Start (CLI)', link: '/guide/getting-started' },
           { text: 'Hosted Service Setup', link: '/guide/hosted-setup' },
           { text: 'Docker Compose', link: '/guide/docker' },
           { text: 'Environment Variables', link: '/guide/env-vars' },
@@ -77,10 +76,12 @@ export default defineConfig({
       {
         text: 'Features',
         items: [
+          { text: 'Multi-Agent Review', link: '/reference/multi-agent' },
+          { text: 'Rules System', link: '/reference/rules' },
+          { text: 'Token Usage', link: '/reference/token-usage' },
           { text: 'Incremental Reviews', link: '/reference/incremental' },
           { text: 'Precision Filter', link: '/guide/review-modes#precision-filter' },
           { text: 'Smart Deduplication', link: '/reference/deduplication' },
-          { text: 'Skills System', link: '/reference/skills' },
           { text: 'Comment Threads', link: '/reference/comment-threads' },
           { text: 'Feedback & Learning Loop', link: '/guide/hosted-setup#feedback-learning-loop' },
           { text: 'Known Issues & Blindspots', link: '/reference/known-issues' },

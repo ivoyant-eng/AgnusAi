@@ -9,6 +9,7 @@ import { Pool } from 'pg'
 import type { FastifyRequest } from 'fastify'
 import { webhookRoutes } from './routes/webhooks'
 import { repoRoutes } from './routes/repos'
+import { rulesRoutes } from './routes/rules'
 import { authRoutes } from './routes/auth'
 import { feedbackRoutes } from './routes/feedback'
 import { initGraphCache, warmupAllRepos } from './graph-cache'
@@ -83,9 +84,11 @@ async function buildServer() {
   app.get('/api/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))
 
   // Routes
+  const rulesSystemEnabled = (process.env.RULES_SYSTEM_ENABLED ?? 'true').toLowerCase() !== 'false'
   await app.register(authRoutes)
   await app.register(webhookRoutes)
   await app.register(repoRoutes)
+  if (rulesSystemEnabled) await app.register(rulesRoutes)
   await app.register(feedbackRoutes)
 
   // GET /api/repos/:id/precision — per-confidence-bucket acceptance rates (auth required)
@@ -347,11 +350,140 @@ async function main() {
     )
   `)
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS review_agent_telemetry (
+      id TEXT PRIMARY KEY,
+      review_id TEXT NOT NULL REFERENCES reviews(id) ON DELETE CASCADE,
+      org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
+      pr_number INT NOT NULL,
+      agent_role TEXT NOT NULL,
+      verdict TEXT NOT NULL,
+      comment_count INT NOT NULL DEFAULT 0,
+      duration_ms INT NOT NULL DEFAULT 0,
+      tokens_used INT,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+  await pool.query(`ALTER TABLE review_agent_telemetry ADD COLUMN IF NOT EXISTS tokens_used INT`)
+  await pool.query(`ALTER TABLE review_agent_telemetry ADD COLUMN IF NOT EXISTS error TEXT`)
+  await pool.query(`ALTER TABLE review_agent_telemetry ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_agent_telemetry_repo_date ON review_agent_telemetry(repo_id, created_at DESC)`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_review_agent_telemetry_org_date ON review_agent_telemetry(org_id, created_at DESC)`)
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS user_settings (
       user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
       review_depth TEXT NOT NULL DEFAULT 'standard'
     )
   `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rules (
+      id TEXT PRIMARY KEY,
+      org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      examples TEXT,
+      category TEXT NOT NULL DEFAULT 'custom',
+      severity TEXT NOT NULL DEFAULT 'warning',
+      enabled BOOLEAN NOT NULL DEFAULT true,
+      scope_type TEXT NOT NULL DEFAULT 'org',
+      repo_id TEXT REFERENCES repos(repo_id) ON DELETE CASCADE,
+      path_pattern TEXT,
+      source TEXT NOT NULL DEFAULT 'manual',
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS examples TEXT`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'custom'`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'warning'`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS enabled BOOLEAN NOT NULL DEFAULT true`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS scope_type TEXT NOT NULL DEFAULT 'org'`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS repo_id TEXT REFERENCES repos(repo_id) ON DELETE CASCADE`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS path_pattern TEXT`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS created_by TEXT REFERENCES users(id) ON DELETE SET NULL`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`)
+  await pool.query(`ALTER TABLE rules ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_rules_org ON rules(org_id)`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_rules_repo ON rules(repo_id)`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_rules_enabled ON rules(org_id, enabled)`)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rule_suggestions (
+      id TEXT PRIMARY KEY,
+      org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      content TEXT NOT NULL,
+      examples TEXT,
+      category TEXT NOT NULL DEFAULT 'custom',
+      severity TEXT NOT NULL DEFAULT 'warning',
+      suggested_scope_type TEXT NOT NULL DEFAULT 'org',
+      suggested_repo_id TEXT REFERENCES repos(repo_id) ON DELETE CASCADE,
+      suggested_path_pattern TEXT,
+      evidence TEXT,
+      source_count INT NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS examples TEXT`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT 'custom'`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS severity TEXT NOT NULL DEFAULT 'warning'`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS suggested_scope_type TEXT NOT NULL DEFAULT 'org'`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS suggested_repo_id TEXT REFERENCES repos(repo_id) ON DELETE CASCADE`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS suggested_path_pattern TEXT`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS evidence TEXT`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS source_count INT NOT NULL DEFAULT 0`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`)
+  await pool.query(`ALTER TABLE rule_suggestions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_rule_suggestions_org_status ON rule_suggestions(org_id, status)`)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rule_violations (
+      id TEXT PRIMARY KEY,
+      rule_id TEXT NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+      org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
+      review_id TEXT REFERENCES reviews(id) ON DELETE SET NULL,
+      pr_number INT NOT NULL,
+      file_path TEXT,
+      line_number INT,
+      comment_body TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      resolved_at TIMESTAMPTZ
+    )
+  `)
+  await pool.query(`ALTER TABLE rule_violations ADD COLUMN IF NOT EXISTS review_id TEXT REFERENCES reviews(id) ON DELETE SET NULL`)
+  await pool.query(`ALTER TABLE rule_violations ADD COLUMN IF NOT EXISTS file_path TEXT`)
+  await pool.query(`ALTER TABLE rule_violations ADD COLUMN IF NOT EXISTS line_number INT`)
+  await pool.query(`ALTER TABLE rule_violations ADD COLUMN IF NOT EXISTS comment_body TEXT NOT NULL DEFAULT ''`)
+  await pool.query(`ALTER TABLE rule_violations ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'open'`)
+  await pool.query(`ALTER TABLE rule_violations ADD COLUMN IF NOT EXISTS detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`)
+  await pool.query(`ALTER TABLE rule_violations ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_rule_violations_org_detected ON rule_violations(org_id, detected_at DESC)`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_rule_violations_rule ON rule_violations(rule_id, detected_at DESC)`)
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS rule_evaluations (
+      id TEXT PRIMARY KEY,
+      rule_id TEXT NOT NULL REFERENCES rules(id) ON DELETE CASCADE,
+      org_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
+      review_id TEXT REFERENCES reviews(id) ON DELETE SET NULL,
+      pr_number INT NOT NULL,
+      passed BOOLEAN NOT NULL,
+      evaluated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (rule_id, repo_id, pr_number, review_id)
+    )
+  `)
+  await pool.query(`ALTER TABLE rule_evaluations ADD COLUMN IF NOT EXISTS review_id TEXT REFERENCES reviews(id) ON DELETE SET NULL`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_rule_evaluations_org_date ON rule_evaluations(org_id, evaluated_at DESC)`)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_rule_evaluations_rule_date ON rule_evaluations(rule_id, evaluated_at DESC)`)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS org_settings (
       org_key TEXT PRIMARY KEY,
@@ -441,6 +573,52 @@ async function main() {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'repo_settings_publish_mode_check') THEN
         ALTER TABLE repo_settings
         ADD CONSTRAINT repo_settings_publish_mode_check CHECK (pr_description_publish_mode IN ('replace_pr', 'comment') OR pr_description_publish_mode IS NULL);
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rules_category_check') THEN
+        ALTER TABLE rules
+        ADD CONSTRAINT rules_category_check CHECK (category IN ('security', 'correctness', 'quality', 'reliability', 'performance', 'testability', 'compliance', 'accessibility', 'observability', 'architecture', 'custom'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rules_severity_check') THEN
+        ALTER TABLE rules
+        ADD CONSTRAINT rules_severity_check CHECK (severity IN ('error', 'warning', 'recommendation'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rules_scope_type_check') THEN
+        ALTER TABLE rules
+        ADD CONSTRAINT rules_scope_type_check CHECK (scope_type IN ('org', 'repo', 'path'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rules_source_check') THEN
+        ALTER TABLE rules
+        ADD CONSTRAINT rules_source_check CHECK (source IN ('manual', 'imported', 'suggested', 'discovered'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rule_suggestions_category_check') THEN
+        ALTER TABLE rule_suggestions
+        ADD CONSTRAINT rule_suggestions_category_check CHECK (category IN ('security', 'correctness', 'quality', 'reliability', 'performance', 'testability', 'compliance', 'accessibility', 'observability', 'architecture', 'custom'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rule_suggestions_severity_check') THEN
+        ALTER TABLE rule_suggestions
+        ADD CONSTRAINT rule_suggestions_severity_check CHECK (severity IN ('error', 'warning', 'recommendation'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rule_suggestions_scope_type_check') THEN
+        ALTER TABLE rule_suggestions
+        ADD CONSTRAINT rule_suggestions_scope_type_check CHECK (suggested_scope_type IN ('org', 'repo', 'path'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rule_suggestions_status_check') THEN
+        ALTER TABLE rule_suggestions
+        ADD CONSTRAINT rule_suggestions_status_check CHECK (status IN ('pending', 'approved', 'dismissed'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'rule_violations_status_check') THEN
+        ALTER TABLE rule_violations
+        ADD CONSTRAINT rule_violations_status_check CHECK (status IN ('open', 'resolved', 'merged_with_violation'));
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'review_agent_telemetry_role_check') THEN
+        ALTER TABLE review_agent_telemetry
+        ADD CONSTRAINT review_agent_telemetry_role_check CHECK (
+          agent_role IN ('security', 'correctness', 'performance', 'style_maintainability', 'ticket_compliance', 'blast_radius')
+        );
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'review_agent_telemetry_verdict_check') THEN
+        ALTER TABLE review_agent_telemetry
+        ADD CONSTRAINT review_agent_telemetry_verdict_check CHECK (verdict IN ('approve', 'request_changes', 'comment'));
       END IF;
     END
     $$;
