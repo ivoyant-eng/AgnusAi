@@ -1,0 +1,44 @@
+services:
+  traefik:
+    image: traefik:v3.6.9
+    command:
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.file.filename=/traefik/dynamic.yml"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
+      - "--entrypoints.websecure.address=:443"
+      - "--accesslog=true"
+      - "--log.level=INFO"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/dynamic.yml:/traefik/dynamic.yml:ro
+      - /etc/nginx/ssl:/etc/nginx/ssl:ro
+    labels:
+      - "traefik.enable=false"
+    restart: unless-stopped
+    networks:
+      - agnus-network
+
+  agnus:
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.agnus-api.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.agnus-api.entrypoints=websecure"
+      - "traefik.http.routers.agnus-api.tls=true"
+      - "traefik.http.routers.agnus-api.service=agnus-api"
+      - "traefik.http.services.agnus-api.loadbalancer.server.port=3000"
+      - "traefik.http.routers.agnus-health.rule=Path(`/health`)"
+      - "traefik.http.routers.agnus-health.entrypoints=websecure"
+      - "traefik.http.routers.agnus-health.tls=true"
+      - "traefik.http.routers.agnus-health.service=agnus-health"
+      - "traefik.http.services.agnus-health.loadbalancer.server.port=3000"
+    depends_on:
+      - traefik
