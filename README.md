@@ -83,10 +83,26 @@ docker compose up --build
 
 ### 2. Start with Docker Compose
 
-Starts:
-- **AgnusAI API** on `http://localhost:3000` (via Traefik)
-- **Postgres + pgvector**
-- **Traefik** reverse proxy (dashboard at `:8080`)
+**Local development** — no Traefik, API exposed directly on port 3000:
+
+```bash
+docker compose up --build
+# API available at http://localhost:3000
+```
+
+**Production** — Traefik handles TLS on ports 80/443:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+# API available via Traefik at https://your-domain.com
+```
+
+| Mode | Command | Access |
+|------|---------|--------|
+| Local | `docker compose up --build` | `http://localhost:3000` |
+| Prod | `docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build` | `https://your-domain.com` (Traefik + TLS) |
+
+The prod override adds Traefik (reverse proxy + TLS) and removes the direct port 3000 binding. All services (Postgres, agnus) are defined once in `docker-compose.yml` — no duplication.
 
 **Ollama is optional.** Use it if you want a local free LLM. If you set `LLM_PROVIDER=openai/claude/azure`, no Ollama needed.
 
