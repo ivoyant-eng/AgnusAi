@@ -136,68 +136,91 @@ const ROLE_LABEL: Record<AgentRole, string> = {
   blast_radius: '💥 Blast Radius',
 };
 
+export const SUMMARY_MARKER = '<!-- agnus-summary -->';
+
 function buildSummaryPrompt(
   outputs: AgentOutput[],
   comments: ReviewComment[],
-  verdict: ReviewResult['verdict'],
   context: ReviewContext,
 ): string {
   const changedFiles = context.diff.files.map(f => f.path).join(', ') || 'unknown';
-
   const agentInputs = outputs
     .filter(o => o.result.summary?.trim())
     .map(o => `[${o.role}]\n${o.result.summary.trim()}`)
     .join('\n\n');
 
-  const errorComments = comments.filter(c => c.severity === 'error');
-  const warningComments = comments.filter(c => c.severity === 'warning');
-  const infoComments = comments.filter(c => c.severity === 'info');
-
-  const mustFixList = errorComments
-    .slice(0, 5)
-    .map(c => `- [${c.path}] ${c.body.split('\n')[0].replace(/\*+/g, '').trim()}`)
-    .join('\n') || '- None — all findings are suggestions.';
-
-  const agentStatusRows = outputs.map(o => {
-    const roleComments = comments.filter(c => c.sourceAgent === o.role);
-    const status = roleComments.length === 0 ? '✅ Clean' : `${roleComments.length} issue${roleComments.length > 1 ? 's' : ''}`;
-    return `| ${ROLE_LABEL[o.role]} | ${status} |`;
-  }).join('\n');
-
   return [
-    'You are the final summary writer for a multi-agent PR review.',
-    'You have received the findings from each specialist agent and the consolidated comment list.',
-    'Your job is to produce a meaningful, human-readable review summary using EXACTLY the template below.',
-    'Fill in every [PLACEHOLDER]. Do not add extra sections. Do not use agent names in the summary paragraph.',
+    'You are writing two prose sections for a PR review summary.',
+    'Respond with ONLY these two labeled lines. No other text, no markdown fences, no extra lines.',
     '',
-    '--- TEMPLATE START ---',
-    '🔄 **Review Summary**',
+    'WHAT_WAS_REVIEWED: <1-2 sentences describing what this PR does. Be concrete — mention the files and the type of change.>',
+    'SUMMARY: <3-5 sentences synthesising what the review found. Write as a single coherent paragraph. No bullet points. Highlight the most important risks and what the author should fix first.>',
     '',
-    `**Verdict:** ${VERDICT_LABEL[verdict]}`,
-    '',
-    '### What was reviewed',
-    '[WHAT_WAS_REVIEWED: 1-2 sentences describing what this PR does, based on the PR title, description, and changed files. Be concrete.]',
-    '',
-    '### Findings at a glance',
-    '| Category | Status |',
-    '|----------|--------|',
-    agentStatusRows,
-    `| **Total** | **${errorComments.length} critical, ${warningComments.length} warnings, ${infoComments.length} suggestions** |`,
-    '',
-    '### Must fix before merge',
-    mustFixList,
-    '',
-    '### Summary',
-    '[SUMMARY: 3-5 sentences synthesising what was found across all areas. Write as a coherent paragraph — no bullet points, no agent names. Highlight the most important risks and what the author should focus on.]',
-    '--- TEMPLATE END ---',
-    '',
-    '--- INPUTS ---',
     `PR Title: ${context.pr.title}`,
     `PR Description: ${context.pr.description?.slice(0, 400) ?? 'N/A'}`,
     `Changed files: ${changedFiles}`,
     '',
     'Agent findings:',
     agentInputs,
+  ].join('\n');
+}
+
+function parseSummaryProse(raw: string): { whatWasReviewed: string; summary: string } | null {
+  const whatMatch = raw.match(/WHAT_WAS_REVIEWED:\s*(.+)/i);
+  const summaryMatch = raw.match(/SUMMARY:\s*(.+)/is);
+  if (!whatMatch || !summaryMatch) return null;
+  return {
+    whatWasReviewed: whatMatch[1].trim(),
+    summary: summaryMatch[1].trim(),
+  };
+}
+
+function assembleSummary(
+  whatWasReviewed: string,
+  summaryParagraph: string,
+  outputs: AgentOutput[],
+  comments: ReviewComment[],
+  verdict: ReviewResult['verdict'],
+): string {
+  const errorComments = comments.filter(c => c.severity === 'error');
+  const warningComments = comments.filter(c => c.severity === 'warning');
+  const infoComments = comments.filter(c => c.severity === 'info');
+
+  const tableRows = outputs
+    .map(o => {
+      const count = comments.filter(c => c.sourceAgent === o.role).length;
+      const status = count === 0 ? '✅ Clean' : `${count} issue${count > 1 ? 's' : ''}`;
+      return `| ${ROLE_LABEL[o.role]} | ${status} |`;
+    })
+    .join('\n');
+
+  const mustFix = errorComments.length > 0
+    ? errorComments
+        .slice(0, 5)
+        .map(c => `- \`${c.path}\` — ${c.body.split('\n')[0].replace(/\*+/g, '').trim()}`)
+        .join('\n')
+    : '_None — all findings are suggestions._';
+
+  return [
+    SUMMARY_MARKER,
+    `🔄 **Review Summary**`,
+    ``,
+    `**Verdict:** ${VERDICT_LABEL[verdict]}`,
+    ``,
+    `### What was reviewed`,
+    whatWasReviewed,
+    ``,
+    `### Findings at a glance`,
+    `| Category | Status |`,
+    `|----------|--------|`,
+    tableRows,
+    `| **Total** | **${errorComments.length} critical, ${warningComments.length} warnings, ${infoComments.length} suggestions** |`,
+    ``,
+    `### Must fix before merge`,
+    mustFix,
+    ``,
+    `### Summary`,
+    summaryParagraph,
   ].join('\n');
 }
 
@@ -209,16 +232,28 @@ async function runSummaryAgent(
   verdict: ReviewResult['verdict'],
 ): Promise<string | null> {
   try {
-    const prompt = buildSummaryPrompt(outputs, comments, verdict, context);
+    const prompt = buildSummaryPrompt(outputs, comments, context);
     const raw = await llm.generate(prompt, context);
-    // Accept anything that looks like our template (starts with the header or contains Verdict:)
-    if (raw.includes('**Verdict:**') || raw.includes('Review Summary')) {
-      return raw.trim();
-    }
-    return null;
+    const parsed = parseSummaryProse(raw);
+    if (!parsed) return null;
+    return assembleSummary(parsed.whatWasReviewed, parsed.summary, outputs, comments, verdict);
   } catch {
     return null;
   }
+}
+
+function buildFallbackSummary(
+  outputs: AgentOutput[],
+  comments: ReviewComment[],
+  verdict: ReviewResult['verdict'],
+): string {
+  return assembleSummary(
+    'No description available.',
+    'Review completed by specialist agents. See inline comments for details.',
+    outputs,
+    comments,
+    verdict,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -364,9 +399,7 @@ export async function runReviewWithSpecialists(
 
   const summary =
     (await runSummaryAgent(llm, context, outputs, comments, verdict)) ??
-    (summaries.length > 0
-      ? `🔄 **Review Summary**\n\n**Verdict:** ${VERDICT_LABEL[verdict]}\n\n${summaries.join('\n')}`
-      : `🔄 **Review Summary**\n\n**Verdict:** ${VERDICT_LABEL[verdict]}\n\nNo findings across all review agents.`);
+    buildFallbackSummary(outputs, comments, verdict);
 
   return {
     summary,

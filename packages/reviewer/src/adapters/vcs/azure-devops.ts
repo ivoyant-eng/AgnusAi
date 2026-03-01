@@ -550,7 +550,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       body: JSON.stringify({
         comments: [{
           parentCommentId: 0,
-          content: `${verdictEmoji[review.verdict]} **Review Summary**\n\n${review.summary}\n\n**Verdict:** ${review.verdict}`,
+          content: review.summary,
           commentType: 'text'
         }],
         status: 'active'

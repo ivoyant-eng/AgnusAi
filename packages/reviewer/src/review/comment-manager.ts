@@ -164,7 +164,7 @@ export class CommentManager {
         await this.vcs.addComment(prId, {
           path: '',
           line: 0,
-          body: `${verdict === 'approve' ? '✅' : verdict === 'request_changes' ? '🔄' : '💬'} **Review Summary**\n\n${summary}\n\n*Note: Some inline comments may not have been posted due to errors.*`,
+          body: `${summary}\n\n*Note: Some inline comments may not have been posted due to errors.*`,
           severity: 'info'
         });
       } catch {
