@@ -117,6 +117,114 @@ function parseJudgeResponse(raw: string, maxIndex: number): { keep: number[]; ve
   return { keep: Array.from(new Set(keep)), verdict: verdictMatch[1].toLowerCase() as ReviewResult['verdict'] }
 }
 
+// ---------------------------------------------------------------------------
+// Summary agent
+// ---------------------------------------------------------------------------
+
+const VERDICT_LABEL: Record<ReviewResult['verdict'], string> = {
+  approve: '✅ Approved',
+  comment: '💬 Comments Only',
+  request_changes: '⚠️ Changes Requested',
+};
+
+const ROLE_LABEL: Record<AgentRole, string> = {
+  security: '🔴 Security',
+  correctness: '🟡 Correctness',
+  performance: '🔵 Performance',
+  style_maintainability: '⚪ Style / Maintainability',
+  ticket_compliance: '📋 Ticket Compliance',
+  blast_radius: '💥 Blast Radius',
+};
+
+function buildSummaryPrompt(
+  outputs: AgentOutput[],
+  comments: ReviewComment[],
+  verdict: ReviewResult['verdict'],
+  context: ReviewContext,
+): string {
+  const changedFiles = context.diff.files.map(f => f.path).join(', ') || 'unknown';
+
+  const agentInputs = outputs
+    .filter(o => o.result.summary?.trim())
+    .map(o => `[${o.role}]\n${o.result.summary.trim()}`)
+    .join('\n\n');
+
+  const errorComments = comments.filter(c => c.severity === 'error');
+  const warningComments = comments.filter(c => c.severity === 'warning');
+  const infoComments = comments.filter(c => c.severity === 'info');
+
+  const mustFixList = errorComments
+    .slice(0, 5)
+    .map(c => `- [${c.path}] ${c.body.split('\n')[0].replace(/\*+/g, '').trim()}`)
+    .join('\n') || '- None — all findings are suggestions.';
+
+  const agentStatusRows = outputs.map(o => {
+    const roleComments = comments.filter(c => c.sourceAgent === o.role);
+    const status = roleComments.length === 0 ? '✅ Clean' : `${roleComments.length} issue${roleComments.length > 1 ? 's' : ''}`;
+    return `| ${ROLE_LABEL[o.role]} | ${status} |`;
+  }).join('\n');
+
+  return [
+    'You are the final summary writer for a multi-agent PR review.',
+    'You have received the findings from each specialist agent and the consolidated comment list.',
+    'Your job is to produce a meaningful, human-readable review summary using EXACTLY the template below.',
+    'Fill in every [PLACEHOLDER]. Do not add extra sections. Do not use agent names in the summary paragraph.',
+    '',
+    '--- TEMPLATE START ---',
+    '🔄 **Review Summary**',
+    '',
+    `**Verdict:** ${VERDICT_LABEL[verdict]}`,
+    '',
+    '### What was reviewed',
+    '[WHAT_WAS_REVIEWED: 1-2 sentences describing what this PR does, based on the PR title, description, and changed files. Be concrete.]',
+    '',
+    '### Findings at a glance',
+    '| Category | Status |',
+    '|----------|--------|',
+    agentStatusRows,
+    `| **Total** | **${errorComments.length} critical, ${warningComments.length} warnings, ${infoComments.length} suggestions** |`,
+    '',
+    '### Must fix before merge',
+    mustFixList,
+    '',
+    '### Summary',
+    '[SUMMARY: 3-5 sentences synthesising what was found across all areas. Write as a coherent paragraph — no bullet points, no agent names. Highlight the most important risks and what the author should focus on.]',
+    '--- TEMPLATE END ---',
+    '',
+    '--- INPUTS ---',
+    `PR Title: ${context.pr.title}`,
+    `PR Description: ${context.pr.description?.slice(0, 400) ?? 'N/A'}`,
+    `Changed files: ${changedFiles}`,
+    '',
+    'Agent findings:',
+    agentInputs,
+  ].join('\n');
+}
+
+async function runSummaryAgent(
+  llm: LLMBackend,
+  context: ReviewContext,
+  outputs: AgentOutput[],
+  comments: ReviewComment[],
+  verdict: ReviewResult['verdict'],
+): Promise<string | null> {
+  try {
+    const prompt = buildSummaryPrompt(outputs, comments, verdict, context);
+    const raw = await llm.generate(prompt, context);
+    // Accept anything that looks like our template (starts with the header or contains Verdict:)
+    if (raw.includes('**Verdict:**') || raw.includes('Review Summary')) {
+      return raw.trim();
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// LLM judge
+// ---------------------------------------------------------------------------
+
 async function llmJudge(
   llm: LLMBackend,
   context: ReviewContext,
@@ -254,9 +362,11 @@ export async function runReviewWithSpecialists(
   }
   if (comments.length > 0 && verdict === 'approve') verdict = 'comment';
 
-  const summary = summaries.length > 0
-    ? `Multi-agent review summary\n${summaries.join('\n')}`
-    : 'Multi-agent review completed with no findings.';
+  const summary =
+    (await runSummaryAgent(llm, context, outputs, comments, verdict)) ??
+    (summaries.length > 0
+      ? `🔄 **Review Summary**\n\n**Verdict:** ${VERDICT_LABEL[verdict]}\n\n${summaries.join('\n')}`
+      : `🔄 **Review Summary**\n\n**Verdict:** ${VERDICT_LABEL[verdict]}\n\nNo findings across all review agents.`);
 
   return {
     summary,
