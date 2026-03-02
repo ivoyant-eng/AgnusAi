@@ -18,6 +18,18 @@ import {
   PRDescriptionResult
 } from '../../types';
 
+/**
+ * Azure DevOps does not render GitHub's ```suggestion``` fences as interactive
+ * suggested changes — it treats the unknown language tag as a plain code block.
+ * Replace each fence with a clearly-labelled fenced block so reviewers can
+ * still read and apply the suggestion manually.
+ */
+function convertSuggestionBlocks(body: string): string {
+  return body.replace(/```suggestion\r?\n([\s\S]*?)\n```/gi, (_, code) =>
+    `**Suggested change:**\n\`\`\`\n${code}\n\`\`\``
+  );
+}
+
 interface AzureDevOpsConfig {
   organization: string;
   project: string;
@@ -489,7 +501,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     const requestBody: any = {
       comments: [{
         parentCommentId: 0,
-        content: body,
+        content: convertSuggestionBlocks(body),
         commentType: 'text'
       }],
       status: 'active',
@@ -637,7 +649,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     const response = await fetch(url, {
       method: 'PATCH',
       headers: this.getAuthHeaders(),
-      body: JSON.stringify({ content: newBody })
+      body: JSON.stringify({ content: convertSuggestionBlocks(newBody) })
     });
     if (!response.ok) {
       console.error(`[azure-adapter] Failed to update thread ${threadId} comment ${commentId}: ${response.statusText}`);
@@ -758,6 +770,23 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     }
 
     throw new Error(`Failed to add PR label "${label}": ${lastStatus || 'unknown error'}`);
+  }
+
+  /**
+   * Reply to an existing PR thread by posting a new comment in it.
+   */
+  async replyToThread(prId: string | number, threadId: number, body: string): Promise<void> {
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments?api-version=7.0`,
+    );
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ content: body, commentType: 1 }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to reply to thread ${threadId}: ${response.statusText}`);
+    }
   }
 
   async getFileContent(path: string, ref?: string): Promise<string> {

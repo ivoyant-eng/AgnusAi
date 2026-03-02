@@ -942,6 +942,19 @@ export class GitHubAdapter implements VCSAdapter {
   }
 
   /**
+   * Reply to an issue-level PR comment by posting a new issue comment.
+   * GitHub issue comments don't support threading, so we post at PR level.
+   */
+  async replyToComment(prId: string | number, _commentId: number, body: string): Promise<void> {
+    await this.octokit.issues.createComment({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: Number(prId),
+      body,
+    });
+  }
+
+  /**
    * Get rate limit status
    */
   async getRateLimit(): Promise<{ limit: number; remaining: number; resetAt: Date } | null> {

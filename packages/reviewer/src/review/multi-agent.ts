@@ -6,17 +6,24 @@ import type {
   ReviewComment,
   ReviewContext,
   ReviewResult,
+  Ticket,
+  TicketComplianceVerdict,
 } from '../types';
 import type { LLMBackend } from '../llm/base';
+import { runSelfReflection } from './self-reflection';
 
 const DEFAULT_AGENT_CONCURRENCY = 2;
 
 const AGENT_DIRECTIVES: Record<AgentRole, string> = {
-  security: 'Focus only on exploitable vulnerabilities, authn/authz gaps, unsafe data handling, and secrets exposure. Ignore style/perf unless it creates a concrete security risk.',
+  security: `Focus only on exploitable vulnerabilities, authn/authz gaps, unsafe data handling, and secrets exposure. Ignore style/perf unless it creates a concrete security risk.
+
+UI Authorization: When reviewing UI components (React/JSX/TSX), check for inconsistent permission gating across sibling elements. If some buttons, menu items, or actions in the same list or array use a permission guard (e.g. \`buttonDisabled: !hasPermission(...)\`, \`disabled: !can(...)\`, \`scope: Permission.X\`) while a sibling hardcodes \`buttonDisabled: false\` or \`disabled={false}\` with no permission check, that is an authorization gap — the action is available to users who should not have access.
+
+Attribution: When flagging a missing permission check on a UI element, reference the exact line where the disabled/buttonDisabled/enabled prop is set in the render config — NOT the callback function the element invokes. The callback itself is not the vulnerability; the unconditional access control prop is.`,
   correctness: 'Focus only on logic errors, race conditions, null/edge-case handling, and behavior regressions. Ignore stylistic feedback.',
   performance: 'Focus only on material performance issues: algorithmic complexity, redundant I/O, N+1 patterns, and hot-path inefficiencies.',
   style_maintainability: 'Focus only on maintainability that impacts future defects: complexity, readability of critical paths, and brittle abstractions. Avoid cosmetic nits.',
-  ticket_compliance: 'Focus only on verifiable gaps: where the PR description or ticket explicitly claims a feature was implemented but the diff contains no evidence of it. Only flag what is definitively absent — you must be able to point to the missing code. Never post uncertainty or "verify this" comments. If the diff does not give you enough information to confirm an absence, stay silent.',
+  ticket_compliance: 'Focus only on verifiable gaps: where the PR description or ticket explicitly claims a feature was implemented but the diff contains no evidence of it. Only flag what is definitively absent — you must be able to point to the missing code. Never post uncertainty or "verify this" comments. If the diff does not give you enough information to confirm an absence, stay silent. For each ticket gap you find, start your comment body with [Ticket: KEY] where KEY is the exact ticket key from ## Linked Tickets. This allows structured verdict generation.',
   blast_radius: 'Focus only on change impact in dependent callers/modules and identify missing adaptations or compatibility handling.',
 };
 
@@ -82,6 +89,73 @@ function deterministicJudge(comments: ReviewComment[]): ReviewComment[] {
   return Array.from(locationBest.values());
 }
 
+/**
+ * Extract code identifiers from a comment body.
+ * Primary: backtick-wrapped terms (e.g. `getUser`).
+ * Secondary: camelCase/PascalCase words in plain text (catches un-backticked identifiers).
+ */
+function extractIdentifiers(body: string): string[] {
+  const backtickIds = (body.match(/`([^`]+)`/g) || [])
+    .map(m => m.replace(/`/g, '').trim().toLowerCase())
+    .filter(t => t.length >= 3 && !/^\d+$/.test(t));
+  const plainText = body.replace(/`[^`]*`/g, '');
+  const camelCaseIds = (plainText.match(/\b[a-z][a-zA-Z]*[A-Z][a-zA-Z]*\b/g) || [])
+    .map(m => m.toLowerCase())
+    .filter(t => t.length >= 6);
+  return [...new Set([...backtickIds, ...camelCaseIds])];
+}
+
+/**
+ * Two comments share a theme when at least half of the smaller identifier set overlaps.
+ * Falls back to normalized text prefix when neither comment has identifiers.
+ */
+function themesOverlap(idsA: string[], idsB: string[], bodyA: string, bodyB: string): boolean {
+  if (idsA.length > 0 && idsB.length > 0) {
+    const setB = new Set(idsB);
+    const overlap = idsA.filter(id => setB.has(id)).length;
+    const smaller = Math.min(idsA.length, idsB.length);
+    return overlap >= Math.max(1, Math.ceil(smaller * 0.5));
+  }
+  if (idsA.length === 0 && idsB.length === 0) {
+    return normalizeThemeText(bodyA) === normalizeThemeText(bodyB);
+  }
+  return false;
+}
+
+function normalizeThemeText(body: string): string {
+  return body
+    .replace(/<[^>]+>/g, '')
+    .replace(/\*+/g, '')
+    .replace(/\[Confidence:[^\]]+\]/gi, '')
+    .toLowerCase()
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 60);
+}
+
+/**
+ * Removes comments that repeat the same theme within the same file.
+ * Uses code identifier overlap (backtick terms + camelCase names) to detect
+ * semantically equivalent comments even when wording differs.
+ * Keeps the highest severity+confidence comment per theme.
+ */
+function themeDedupeComments(comments: ReviewComment[]): ReviewComment[] {
+  const score = (c: ReviewComment) => severityRank(c.severity) * 10 + (c.confidence ?? 0);
+  const sorted = [...comments].sort((a, b) => score(b) - score(a));
+  const kept: { comment: ReviewComment; ids: string[] }[] = [];
+  for (const comment of sorted) {
+    const ids = extractIdentifiers(comment.body);
+    const dominated = kept.some(k =>
+      k.comment.path === comment.path && themesOverlap(k.ids, ids, k.comment.body, comment.body)
+    );
+    if (!dominated) {
+      kept.push({ comment, ids });
+    }
+  }
+  return kept.map(k => k.comment);
+}
+
 function buildJudgePrompt(comments: ReviewComment[]): string {
   const numbered = comments.map((c, idx) => {
     const confidence = c.confidence ?? 0
@@ -93,6 +167,7 @@ function buildJudgePrompt(comments: ReviewComment[]): string {
     'Select only high-signal, non-duplicate, actionable findings.',
     'Prefer correctness/security/performance over style when conflicts exist.',
     'DISCARD any finding that uses hedging language such as "does not appear in the diff", "verify that", "not explicitly shown", "ensure this was implemented", or similar phrases that indicate the reviewer could not confirm the issue from the diff — these are not findings.',
+    'DISCARD theme duplicates: if multiple findings describe the same conceptual issue across different lines, agents, or angles in the same file, keep only the single highest-severity/confidence instance. Two findings share a theme when their core message — stripped of file names, line numbers, and code snippets — conveys the same fix. Examples of the same theme: "buttonDisabled: false has no permission check" at line 223 and "buttonDisabled: false bypasses hasPermission" at line 225 — same fix, discard the weaker one. "missing null check on X" and "X could be undefined" — same fix. "no try-catch" and "unhandled promise rejection" — same fix.',
     'Return output exactly in this format:',
     'KEEP: <comma-separated numbers or "none">',
     'VERDICT: approve|request_changes|comment',
@@ -115,6 +190,56 @@ function parseJudgeResponse(raw: string, maxIndex: number): { keep: number[]; ve
       .filter(v => Number.isFinite(v) && v >= 1 && v <= maxIndex)
       .map(v => v - 1)
   return { keep: Array.from(new Set(keep)), verdict: verdictMatch[1].toLowerCase() as ReviewResult['verdict'] }
+}
+
+// ---------------------------------------------------------------------------
+// Ticket compliance verdict
+// ---------------------------------------------------------------------------
+
+function buildTicketComplianceVerdict(
+  tickets: Ticket[],
+  complianceComments: ReviewComment[],
+): { table: string; verdicts: TicketComplianceVerdict[] } {
+  const verdicts: TicketComplianceVerdict[] = [];
+  const rows: string[] = [];
+
+  for (const ticket of tickets) {
+    const related = complianceComments.filter(
+      (c) =>
+        c.body.includes(ticket.key) ||
+        c.body.toLowerCase().includes(ticket.title.slice(0, 30).toLowerCase()),
+    );
+    const status: TicketComplianceVerdict['status'] =
+      related.length === 0
+        ? 'compliant'
+        : related.some((c) => c.severity === 'error')
+        ? 'noncompliant'
+        : 'partial';
+    const statusEmoji = { compliant: '✅', partial: '🔶', noncompliant: '❌' }[status];
+    const verdictLabel = {
+      compliant: 'Fully Compliant',
+      partial: 'Partially Compliant',
+      noncompliant: 'Not Compliant',
+    }[status];
+    const gaps =
+      related
+        .map((c) => c.body.split('\n')[0].replace(/\*+/g, '').replace(/^\[Ticket:[^\]]+\]\s*/i, '').trim())
+        .filter(Boolean)
+        .join('; ') || '—';
+    const shortTitle = ticket.title.slice(0, 40);
+
+    rows.push(`| ${ticket.key}: ${shortTitle} | ${statusEmoji} ${verdictLabel} | ${gaps} |`);
+    verdicts.push({ ticketKey: ticket.key, ticketTitle: ticket.title, status, gaps });
+  }
+
+  const table = [
+    '\n## 📋 Ticket Compliance\n',
+    '| Ticket | Verdict | Gaps |',
+    '|--------|---------|------|',
+    ...rows,
+  ].join('\n');
+
+  return { table, verdicts };
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +306,7 @@ function assembleSummary(
   outputs: AgentOutput[],
   comments: ReviewComment[],
   verdict: ReviewResult['verdict'],
+  tickets?: Ticket[],
 ): string {
   const errorComments = comments.filter(c => c.severity === 'error');
   const warningComments = comments.filter(c => c.severity === 'warning');
@@ -200,6 +326,13 @@ function assembleSummary(
         .map(c => `- \`${c.path}\` — ${c.body.split('\n')[0].replace(/\*+/g, '').trim()}`)
         .join('\n')
     : '_None — all findings are suggestions._';
+
+  // Build ticket compliance section if tickets are present
+  const complianceComments = comments.filter((c) => c.sourceAgent === 'ticket_compliance');
+  const complianceSection =
+    tickets && tickets.length > 0 && complianceComments.length >= 0
+      ? buildTicketComplianceVerdict(tickets, complianceComments).table
+      : '';
 
   return [
     SUMMARY_MARKER,
@@ -221,6 +354,7 @@ function assembleSummary(
     ``,
     `### Summary`,
     summaryParagraph,
+    complianceSection,
   ].join('\n');
 }
 
@@ -233,10 +367,10 @@ async function runSummaryAgent(
 ): Promise<string | null> {
   try {
     const prompt = buildSummaryPrompt(outputs, comments, context);
-    const raw = await llm.generate(prompt, context);
+    const raw = await llm.generate(prompt, context, 0);
     const parsed = parseSummaryProse(raw);
     if (!parsed) return null;
-    return assembleSummary(parsed.whatWasReviewed, parsed.summary, outputs, comments, verdict);
+    return assembleSummary(parsed.whatWasReviewed, parsed.summary, outputs, comments, verdict, context.tickets);
   } catch {
     return null;
   }
@@ -246,6 +380,7 @@ function buildFallbackSummary(
   outputs: AgentOutput[],
   comments: ReviewComment[],
   verdict: ReviewResult['verdict'],
+  tickets?: Ticket[],
 ): string {
   return assembleSummary(
     'No description available.',
@@ -253,6 +388,7 @@ function buildFallbackSummary(
     outputs,
     comments,
     verdict,
+    tickets,
   );
 }
 
@@ -268,7 +404,7 @@ async function llmJudge(
   if (comments.length === 0) return { comments: [] }
   try {
     const prompt = buildJudgePrompt(comments)
-    const response = await llm.generate(prompt, context)
+    const response = await llm.generate(prompt, context, 0)
     const parsed = parseJudgeResponse(response, comments.length)
     if (!parsed) return null
     return {
@@ -320,11 +456,13 @@ async function runSingleAgent(
 ): Promise<AgentOutput> {
   const started = Date.now();
   try {
+    // Agents run at temperature=0 for deterministic, reproducible findings.
+    // Variance comes from prompt content, not LLM sampling noise.
     const result = await llm.generateReview({
       ...context,
       agentRole: role,
       agentDirective: AGENT_DIRECTIVES[role],
-    });
+    }, 0);
     const comments = result.comments.map(c => ({ ...c, sourceAgent: role }));
     const output: ReviewResult = { ...result, comments };
     const telemetry: AgentTelemetry = {
@@ -395,11 +533,25 @@ export async function runReviewWithSpecialists(
       comments = deterministicJudge(deduped);
     }
   }
+  comments = themeDedupeComments(comments);
+  // Self-reflection second pass (re-scores comments, drops low-quality ones)
+  if (context.config.selfReflectionEnabled) {
+    const reflThreshold = context.config.selfReflectionThreshold ?? 5;
+    comments = await runSelfReflection(llm, context, comments, reflThreshold, 1);
+  }
+
   if (comments.length > 0 && verdict === 'approve') verdict = 'comment';
 
   const summary =
     (await runSummaryAgent(llm, context, outputs, comments, verdict)) ??
-    buildFallbackSummary(outputs, comments, verdict);
+    buildFallbackSummary(outputs, comments, verdict, context.tickets);
+
+  // Build compliance verdict for structured access
+  const complianceComments = comments.filter((c) => c.sourceAgent === 'ticket_compliance');
+  const complianceVerdict =
+    context.tickets?.length > 0
+      ? buildTicketComplianceVerdict(context.tickets, complianceComments).verdicts
+      : undefined;
 
   return {
     summary,
@@ -407,5 +559,6 @@ export async function runReviewWithSpecialists(
     suggestions: [],
     verdict,
     agentTelemetry: outputs.map(o => o.telemetry),
+    complianceVerdict,
   };
 }

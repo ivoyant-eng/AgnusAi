@@ -2,7 +2,7 @@
 
 > **Research date:** February 2026
 > **Benchmark:** Qodo (formerly CodiumAI) — Qodo Merge v2.1, Gartner 2025 Visionary
-> **AgnusAI current state:** v2 complete — graph-aware reviews, Fastify API, React dashboard, GitHub + Azure webhooks, Ollama/OpenAI/Claude/Azure backends, pgvector RAG feedback loop, precision filter, incremental checkpointing.
+> **AgnusAI current state:** v2 complete + v3 in progress — graph-aware reviews, Fastify API, React dashboard, GitHub + Azure webhooks, Ollama/OpenAI/Claude/Azure backends, pgvector RAG feedback loop, precision filter, incremental checkpointing, multi-agent specialist orchestration, rules enforcement system, Jira/Linear/Azure Boards/GitHub Issues ticket adapters.
 
 ---
 
@@ -39,7 +39,7 @@ Qodo posts suggestions in GitHub's native suggestion block format (one-click app
 
 **Impact:** One-click apply is a major developer UX win. Without it, every fix requires a context switch to the editor.
 
-#### G3 — Rules System with Continuous Learning
+#### G3 — Rules System with Continuous Learning ✅ IMPLEMENTED
 
 Qodo v2.1 (Feb 2026) ships a four-component rules engine:
 
@@ -48,32 +48,35 @@ Qodo v2.1 (Feb 2026) ships a four-component rules engine:
 3. Scalable Enforcement — every PR checked against the rule set automatically
 4. Analytics — per-rule adoption rates, violation trends, merged violations, CSV export
 
-AgnusAI has the YAML skills system + pgvector RAG feedback loop (`priorExamples`/`rejectedExamples`) — the seed of this capability exists, but it is not surfaced as user-visible governed rules with a management UI or analytics.
+**AgnusAI status:** Rules enforcement engine (`rules-enforcement.ts`), REST CRUD routes (`/api/rules`), Rules dashboard page, and org/repo/path-scoped rule injection into every LLM prompt are all implemented. Rules are cited inline in review comments (`Rule: <name>`). Violation tracking and analytics dashboard components (per-rule adoption, violation trends) are implemented. Auto-discovery and pruning agents are not yet built (G13 territory).
 
-**Impact:** For security-sensitive enterprise ICP (fintech/health/defense), demonstrating standards are being enforced and improving over time is a compliance requirement.
 **Plan:** `docs/plans/rules-system.md`
 
-#### G4 — Multi-Agent Specialized Review Architecture
+#### G4 — Multi-Agent Specialized Review Architecture ✅ IMPLEMENTED
 
-Qodo v2.0 runs parallel specialized agents (security, performance, best-practices, ticket-compliance), a Context Collector, and a Judge that consolidates and deduplicates findings. This is why they claim 60.1% F1 on their benchmark (9% ahead of next competitor). AgnusAI does a single LLM call per review — the skills system injects domain instructions but is not parallel multi-agent.
+Qodo v2.0 runs parallel specialized agents (security, performance, best-practices, ticket-compliance), a Context Collector, and a Judge that consolidates and deduplicates findings.
 
-**Impact:** Multi-agent allows focused smaller prompts (lower hallucination), more recall (more real bugs caught), and a Judge to eliminate false positives across agents.
+**AgnusAI status:** `multi-agent.ts` fans out to 6 specialist agents (security, correctness, performance, style_maintainability, ticket_compliance, blast_radius) concurrently. Deduplication + deterministic/LLM Judge pass eliminates false positives. A dedicated Summary agent assembles a consistent structured summary after all agents complete. Configurable via `MULTI_AGENT_ENABLED`, `REVIEW_MODE`, `AGENT_CONCURRENCY`, `JUDGE_ENABLED`, `JUDGE_MODE` env vars.
+
 **Plan:** `docs/plans/multi-agent-architecture.md`
 
-#### G5 — Multi-Organization Support
+#### G5 — Multi-Organization Support ✅ IMPLEMENTED
 
-Qodo supports multiple GitHub/Azure/GitLab organizations under one deployment, with per-org webhook endpoints, per-org configuration, and org-scoped user management. AgnusAI is single-tenant today — one admin, invite-only, no organization concept, global webhooks.
+Qodo supports multiple GitHub/Azure/GitLab organizations under one deployment, with per-org webhook endpoints, per-org configuration, and org-scoped user management.
 
-**Impact:** Blocks enterprise adoption. Any team with multiple business units, subsidiaries, or product lines cannot use AgnusAI today.
+**AgnusAI status:** Multi-org RBAC and settings implemented in PR #6 (feat/multi-org-rbac-settings). Per-org webhook endpoints, org-scoped invites, and org-scoped rule sets are all live.
+
 **Plan:** `docs/plans/multi-org.md`
 
 ---
 
 ### 🟠 Medium-High Impact
 
-#### G6 — Ticket Compliance Scoring
+#### G6 — Ticket Compliance Scoring ✅ IMPLEMENTED (adapters) / 🔶 PARTIAL (structured verdict)
 
-Qodo fetches acceptance criteria from Jira/Linear/Azure Boards/GitHub Issues and posts a structured verdict: `Fully Compliant / Partially Compliant / Not Compliant` with specific gaps listed. AgnusAI injects ticket context into the prompt but the LLM may or may not mention compliance in its freeform output.
+Qodo fetches acceptance criteria from Jira/Linear/Azure Boards/GitHub Issues and posts a structured verdict: `Fully Compliant / Partially Compliant / Not Compliant` with specific gaps listed.
+
+**AgnusAI status:** Full ticket adapters implemented and wired for Jira (REST API v3 + ADF parser), Linear (GraphQL), Azure Boards (Work Items API + HTML stripper), and GitHub Issues. Ticket context (title, description, acceptance criteria, labels) is injected into every LLM prompt via `## Linked Tickets` section. The `ticket_compliance` specialist agent checks this against the diff. What is not yet built: the structured `Fully/Partially/Not Compliant` verdict output — the agent currently produces freeform compliance comments. Configure via `TICKET_PROVIDER` + provider-specific env vars.
 
 **Impact:** Number one feature requested by PMs and QA leads. Makes the reviewer a traceability tool, not just a quality tool.
 
@@ -153,37 +156,37 @@ Reads diff + commits → creates a structured ticket in Jira/Linear/GitHub Issue
 These are the minimum gaps that block sales to multi-team organizations:
 
 
-| #   | Feature                                                                                                  | Effort | Plan                        |
-| --- | -------------------------------------------------------------------------------------------------------- | ------ | --------------------------- |
-| 1   | **Multi-organization support** — org entity, per-org webhooks, signup, org-scoped invites                | Large  | `docs/plans/multi-org.md`   |
-| 2   | **PR description generation** — auto-write title + walkthrough + type label to PR                        | Medium | `docs/plans/pr-describe.md` |
-| 3   | **PR label automation** — security, effort, change type                                                  | Small  | inline with G2              |
-| 4   | **Inline suggestion validation** — tree-sitter check before posting `suggestion` blocks                  | Small  | inline with G2              |
-| 5   | **Ticket compliance verdict** — structured Fully/Partially/Not Compliant (ticket context already exists) | Small  | standalone                  |
+| #   | Feature                                                                                                  | Effort | Status      | Plan                        |
+| --- | -------------------------------------------------------------------------------------------------------- | ------ | ----------- | --------------------------- |
+| 1   | **Multi-organization support** — org entity, per-org webhooks, signup, org-scoped invites                | Large  | ✅ Done     | `docs/plans/multi-org.md`   |
+| 2   | **PR description generation** — auto-write title + walkthrough + type label to PR                        | Medium | ✅ Done     | `docs/plans/pr-describe.md` |
+| 3   | **PR label automation** — security, effort, change type                                                  | Small  | ✅ Done     | inline with G2              |
+| 4   | **Inline suggestion validation** — tree-sitter check before posting `suggestion` blocks                  | Small  | ❌ Todo     | inline with G2              |
+| 5   | **Ticket compliance verdict** — structured Fully/Partially/Not Compliant (ticket context already exists) | Small  | 🔶 Partial  | standalone                  |
 
 
 ### Phase 2 — Governance (Enterprise Stickiness)
 
 
-| #   | Feature                                                                            | Effort | Plan                         |
-| --- | ---------------------------------------------------------------------------------- | ------ | ---------------------------- |
-| 6   | **Rules System UI** — surface RAG loop as named rules with analytics dashboard     | Large  | `docs/plans/rules-system.md` |
-| 7   | **Self-reflection second pass** — second LLM call to re-rank and prune suggestions | Small  | standalone                   |
-| 8   | `**/ask` command** — respond to PR comment slash commands                          | Medium | standalone                   |
-| 9   | **PR splitting detection**                                                         | Small  | inline                       |
-| 10  | `**best_practices.md` hierarchy** — org → group → repo → subproject                | Medium | standalone                   |
+| #   | Feature                                                                            | Effort | Status   | Plan                         |
+| --- | ---------------------------------------------------------------------------------- | ------ | -------- | ---------------------------- |
+| 6   | **Rules System UI** — surface RAG loop as named rules with analytics dashboard     | Large  | ✅ Done  | `docs/plans/rules-system.md` |
+| 7   | **Self-reflection second pass** — second LLM call to re-rank and prune suggestions | Small  | ❌ Todo  | standalone                   |
+| 8   | `/ask` command — respond to PR comment slash commands                              | Medium | ❌ Todo  | standalone                   |
+| 9   | **PR splitting detection**                                                         | Small  | ❌ Todo  | inline                       |
+| 10  | `best_practices.md` hierarchy — org → group → repo → subproject                   | Medium | ❌ Todo  | standalone                   |
 
 
 ### Phase 3 — Breadth (Match Feature Parity)
 
 
-| #   | Feature                                                     | Effort | Plan                                     |
-| --- | ----------------------------------------------------------- | ------ | ---------------------------------------- |
-| 11  | **Multi-agent architecture** — parallel specialists + Judge | Large  | `docs/plans/multi-agent-architecture.md` |
-| 12  | **Test generation**                                         | Large  | standalone                               |
-| 13  | **CI failure analysis**                                     | Medium | standalone                               |
-| 14  | **Auto best practices distillation**                        | Medium | standalone                               |
-| 15  | **Documentation generation**                                | Medium | standalone                               |
+| #   | Feature                                                     | Effort | Status   | Plan                                     |
+| --- | ----------------------------------------------------------- | ------ | -------- | ---------------------------------------- |
+| 11  | **Multi-agent architecture** — parallel specialists + Judge | Large  | ✅ Done  | `docs/plans/multi-agent-architecture.md` |
+| 12  | **Test generation**                                         | Large  | ❌ Todo  | standalone                               |
+| 13  | **CI failure analysis**                                     | Medium | ❌ Todo  | standalone                               |
+| 14  | **Auto best practices distillation**                        | Medium | ❌ Todo  | standalone                               |
+| 15  | **Documentation generation**                                | Medium | ❌ Todo  | standalone                               |
 
 
 ---

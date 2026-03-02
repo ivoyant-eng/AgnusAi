@@ -1,5 +1,6 @@
 export * from './parser/LanguageParser'
 export * from './parser/ParserRegistry'
+export * from './parser/syntax-validator'
 export * from './graph/InMemorySymbolGraph'
 export * from './storage/StorageAdapter'
 export * from './storage/PostgresStorageAdapter'

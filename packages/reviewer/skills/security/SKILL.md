@@ -24,6 +24,7 @@ Focus exclusively on security vulnerabilities and best practices.
 - [ ] Session management secure
 - [ ] Password/credential handling secure
 
+
 ## Input Validation
 
 - [ ] All user input validated and sanitized

@@ -6,6 +6,8 @@ export { VCSAdapter } from './adapters/vcs/base';
 
 export { JiraAdapter } from './adapters/ticket/jira';
 export { LinearAdapter } from './adapters/ticket/linear';
+export { AzureBoardsAdapter } from './adapters/ticket/azure-boards';
+export { GitHubIssuesAdapter } from './adapters/ticket/github-issues';
 export { TicketAdapter } from './adapters/ticket/base';
 
 export { OllamaBackend, createOllamaBackend } from './llm/ollama';
@@ -34,6 +36,11 @@ export * from './types';
 export { filterByConfidence, DEFAULT_PRECISION_CONFIG } from './review/precision-filter';
 export type { PrecisionFilterConfig, FilteredByConfidence } from './review/precision-filter';
 export { runReviewWithSpecialists } from './review/multi-agent';
+export { buildReviewPrompt, buildAskPrompt, buildPRDescriptionPrompt, serializeGraphContext } from './llm/prompt';
+export { validateSuggestions } from './review/suggestion-validator';
+export { runSelfReflection } from './review/self-reflection';
+export { detectSplit } from './review/split-detector';
+export { loadBestPractices } from './review/best-practices-loader';
 
 import { VCSAdapter } from './adapters/vcs/base';
 import { TicketAdapter } from './adapters/ticket/base';
@@ -49,6 +56,10 @@ import {
 } from './review/checkpoint';
 import { filterByConfidence } from './review/precision-filter';
 import { runReviewWithSpecialists } from './review/multi-agent';
+import { validateSuggestions, type ParseFn } from './review/suggestion-validator';
+import { runSelfReflection } from './review/self-reflection';
+import { detectSplit, formatSplitSuggestion } from './review/split-detector';
+import { loadBestPractices } from './review/best-practices-loader';
 
 /**
  * Result of an incremental review check
@@ -70,6 +81,19 @@ export interface IncrementalCheckResult {
 export interface ExtendedReviewResult extends ReviewResult {
   /** All files that were in the diff and reviewed */
   filesReviewed?: string[];
+}
+
+/** Try to get the strict syntax validator from @agnus-ai/core; fall back to passthrough. */
+async function getSyntaxParser(): Promise<ParseFn> {
+  try {
+    const core = await import('@agnus-ai/core' as any);
+    if (typeof core.isSyntaxValidStrict === 'function') {
+      return core.isSyntaxValidStrict as ParseFn;
+    }
+  } catch {
+    // core not available in this environment — graceful degradation
+  }
+  return async () => true;
 }
 
 export class PRReviewAgent {
@@ -222,6 +246,20 @@ export class PRReviewAgent {
       (await runReviewWithSpecialists(this.llm, context)) ??
       (await this.llm.generateReview(context));
 
+    // Self-reflection second pass (single-agent path only)
+    const selfReflectionEnabled = this.config.review?.selfReflectionEnabled;
+    const isMultiAgent = Array.isArray((result as any).agentTelemetry) && (result as any).agentTelemetry.length > 0;
+    if (selfReflectionEnabled && !isMultiAgent) {
+      const reflThreshold = this.config.review?.selfReflectionThreshold ?? 5;
+      result.comments = await runSelfReflection(this.llm, context, result.comments, reflThreshold);
+    }
+
+    // Inline suggestion validation
+    if (result.comments.some(c => c.suggestion)) {
+      const parseFn = await getSyntaxParser();
+      result.comments = await validateSuggestions(result.comments, relevantFiles, parseFn);
+    }
+
     // Precision filter
     const threshold = this.config.review?.precisionThreshold ?? 0.7;
     const { kept, filtered } = filterByConfidence(result.comments, { minConfidence: threshold });
@@ -316,6 +354,22 @@ export class PRReviewAgent {
       files.map(f => f.path)
     );
 
+    // 3b. Load best_practices.md files from VCS (gracefully degraded)
+    let bestPractices: string | undefined;
+    const bestPracticesEnabled = this.config.review?.bestPracticesEnabled !== false;
+    if (bestPracticesEnabled) {
+      try {
+        const maxChars = this.config.review?.bestPracticesMaxChars ?? 3000;
+        const loaded = await loadBestPractices(this.vcs, diff, pr.targetBranch, maxChars);
+        if (loaded) {
+          bestPractices = loaded;
+          console.log(`📋 Loaded best_practices.md (${loaded.length} chars)`);
+        }
+      } catch {
+        // VCS call failed — skip silently
+      }
+    }
+
     // 4. Build context
     const context: ReviewContext = {
       pr,
@@ -325,12 +379,27 @@ export class PRReviewAgent {
       skills: applicableSkills,
       config: this.config.review,
       graphContext,
+      bestPractices,
     };
 
     // 5. Run review (single-agent or specialist orchestration)
     const result =
       (await runReviewWithSpecialists(this.llm, context)) ??
       (await this.llm.generateReview(context));
+
+    // 5b. Self-reflection second pass (single-agent path only; multi-agent wires it internally)
+    const selfReflectionEnabled = this.config.review?.selfReflectionEnabled;
+    const isMultiAgent = Array.isArray((result as any).agentTelemetry) && (result as any).agentTelemetry.length > 0;
+    if (selfReflectionEnabled && !isMultiAgent) {
+      const reflThreshold = this.config.review?.selfReflectionThreshold ?? 5;
+      result.comments = await runSelfReflection(this.llm, context, result.comments, reflThreshold);
+    }
+
+    // 5c. Inline suggestion validation (tree-sitter syntax check)
+    if (result.comments.some(c => c.suggestion)) {
+      const parseFn = await getSyntaxParser();
+      result.comments = await validateSuggestions(result.comments, files, parseFn);
+    }
 
     // 6. Precision filter — drop low-confidence comments
     const threshold = this.config.review?.precisionThreshold ?? 0.7;
@@ -399,6 +468,28 @@ export class PRReviewAgent {
         continue;
       }
       validComments.push({ ...comment, path: resolvedPath });
+    }
+
+    // PR split detection (deterministic heuristics + optional LLM analysis)
+    const splitEnabled = this.config.review?.splitDetectionEnabled !== false;
+    const splitFileThreshold = this.config.review?.splitFileThreshold ?? 15;
+    if (splitEnabled) {
+      try {
+        const splitResult = await detectSplit(this.llm, diff, {
+          pr: await this.vcs.getPR(prId),
+          diff,
+          files: [],
+          tickets: [],
+          skills: [],
+          config: this.config.review,
+        }, splitFileThreshold);
+        if (splitResult?.shouldSplit) {
+          result.splitSuggestion = splitResult;
+          result.summary = result.summary + formatSplitSuggestion(splitResult);
+        }
+      } catch {
+        // Split detection failed — skip silently
+      }
     }
 
     // Submit overall review — body is the model-generated markdown, used as-is

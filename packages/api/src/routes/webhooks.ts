@@ -11,6 +11,7 @@ import {
   markMergedViolations,
   type PREvent,
 } from '../pr-event'
+import { runAsk } from '../ask-runner'
 
 const execAsync = promisify(exec)
 
@@ -95,6 +96,13 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl, orgSlug)
     if (!repoId) return reply.status(200).send({ ok: true })
+
+    // /ask command — intercept issue_comment before PR event normalization
+    if (event === 'issue_comment' && payload.action === 'created') {
+      const result = await handleAskCommand(payload, repoId, repoUrl, pool, 'github')
+      if (result) return reply.status(202).send({ status: 'ask accepted' })
+    }
+
     const prEvent = await normalizeGithubEvent(event, payload, repoId, repoUrl, pool)
     await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
@@ -138,6 +146,13 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl)
     if (!repoId) return reply.status(200).send({ ok: true })
+
+    // /ask command — intercept issue_comment before PR event normalization
+    if (event === 'issue_comment' && payload.action === 'created') {
+      const result = await handleAskCommand(payload, repoId, repoUrl, pool, 'github')
+      if (result) return reply.status(202).send({ status: 'ask accepted' })
+    }
+
     const prEvent = await normalizeGithubEvent(event, payload, repoId, repoUrl, pool)
     await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
@@ -159,6 +174,46 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
   })
+}
+
+// ─── /ask command handler ─────────────────────────────────────────────────────
+
+const ASK_ENABLED = (process.env.ASK_ENABLED ?? 'true').toLowerCase() !== 'false'
+
+async function handleAskCommand(
+  payload: Record<string, unknown>,
+  repoId: string,
+  repoUrl: string,
+  pool: Pool,
+  platform: 'github' | 'azure',
+): Promise<boolean> {
+  if (!ASK_ENABLED) return false
+
+  const body = (payload.comment as any)?.body?.trim() ?? ''
+  if (!body.startsWith('/ask ')) return false
+
+  // Only respond to PR issue comments (not plain issue comments)
+  const issue = payload.issue as any
+  if (!issue?.pull_request) return false
+
+  const question = body.slice('/ask '.length).trim()
+  if (!question) return false
+
+  const prNumber = issue.number as number
+  const commentId = (payload.comment as any)?.id as number
+  const baseBranch = issue.pull_request?.base?.ref ?? 'main'
+
+  const tokenRes = await pool.query<{ token: string | null }>(
+    'SELECT token FROM repos WHERE repo_id = $1',
+    [repoId],
+  )
+  const token = tokenRes.rows[0]?.token ?? undefined
+
+  setImmediate(() =>
+    runAsk({ platform, repoId, repoUrl, prNumber, question, commentId, token, baseBranch, pool })
+      .catch(err => console.error('[ask-runner] Error:', (err as Error).message))
+  )
+  return true
 }
 
 // ─── Dispatch ─────────────────────────────────────────────────────────────────

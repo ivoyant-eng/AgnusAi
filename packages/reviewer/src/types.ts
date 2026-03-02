@@ -93,6 +93,8 @@ export interface ReviewContext {
   graphContext?: GraphReviewContext;
   agentRole?: AgentRole;
   agentDirective?: string;
+  /** Concatenated content from .agnus/best_practices.md files */
+  bestPractices?: string;
 }
 
 export const AGENT_ROLES = [
@@ -125,8 +127,22 @@ export interface AgentOutput {
   telemetry: AgentTelemetry;
 }
 
+export interface TicketComplianceVerdict {
+  ticketKey: string;
+  ticketTitle: string;
+  status: 'compliant' | 'partial' | 'noncompliant';
+  gaps: string;
+}
+
 export interface ConsolidatedReview extends ReviewResult {
   agentTelemetry: AgentTelemetry[];
+  complianceVerdict?: TicketComplianceVerdict[];
+}
+
+export interface SplitSuggestion {
+  shouldSplit: boolean;
+  reason: string;
+  suggestedSplits: Array<{ name: string; files: string[] }>;
 }
 
 export interface ReviewResult {
@@ -135,6 +151,8 @@ export interface ReviewResult {
   suggestions: CodeSuggestion[];
   verdict: 'approve' | 'request_changes' | 'comment';
   tokensUsed?: number;
+  /** PR splitting recommendation, populated when SPLIT_DETECTION_ENABLED and heuristics fire */
+  splitSuggestion?: SplitSuggestion;
 }
 
 export type PRChangeType = 'bug' | 'feature' | 'refactor' | 'docs' | 'tests' | 'chore';
@@ -174,6 +192,18 @@ export interface ReviewConfig {
   judgeEnabled?: boolean;
   /** Judge strategy */
   judgeMode?: 'deterministic' | 'llm';
+  /** Enable self-reflection second pass to re-score comments (default: false) */
+  selfReflectionEnabled?: boolean;
+  /** Score threshold 0–10 for self-reflection pass (default: 5) */
+  selfReflectionThreshold?: number;
+  /** Detect PRs that span too many unrelated concerns (default: true) */
+  splitDetectionEnabled?: boolean;
+  /** File count threshold to trigger split analysis (default: 15) */
+  splitFileThreshold?: number;
+  /** Load .agnus/best_practices.md files from VCS (default: true) */
+  bestPracticesEnabled?: boolean;
+  /** Max characters to include from best_practices.md files (default: 3000) */
+  bestPracticesMaxChars?: number;
 }
 
 export interface Skill {
