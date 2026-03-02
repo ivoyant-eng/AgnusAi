@@ -50,7 +50,7 @@ export function parseCommentBlocks(response: string): ReviewComment[] {
       continue
     }
     markers.push({
-      path: m[1].trim(),
+      path: m[1].trim().replace(/^`+|`+$/g, ''),
       line: lineNum,
       markerStart: m.index,
       contentStart: m.index + m[0].length,
@@ -71,12 +71,17 @@ export function parseCommentBlocks(response: string): ReviewComment[] {
     // Remove confidence marker from body
     const cleanBody = body.replace(/\[Confidence:\s*[\d.]+\]\s*/i, '').trim()
 
+    // Extract suggestion block (```suggestion ... ```) from body
+    const suggestionMatch = cleanBody.match(/```suggestion\s*\n([\s\S]*?)\n```/i)
+    const suggestion = suggestionMatch ? suggestionMatch[1] : undefined
+
     comments.push({
       path: markers[i].path,
       line: markers[i].line,
       body: cleanBody,
       severity: detectSeverity(body),
       confidence: confidence,
+      suggestion,
     })
   }
 

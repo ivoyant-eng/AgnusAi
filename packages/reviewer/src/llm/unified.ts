@@ -36,23 +36,30 @@ export interface UnifiedLLMConfig {
   // ollama / custom
   baseURL?: string;
   customApiKey?: string;
+  /** Default sampling temperature for all calls. 0 = deterministic, 1 = default model behaviour.
+   *  Overridable per-call via the temperature param on generate(). */
+  temperature?: number;
 }
 
 export class UnifiedLLMBackend extends BaseLLMBackend {
   readonly name: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private languageModel: any;
+  private defaultTemperature: number | undefined;
 
   constructor(config: UnifiedLLMConfig) {
     super();
     this.name = config.provider;
     this.languageModel = buildLanguageModel(config);
+    this.defaultTemperature = config.temperature;
   }
 
-  async generate(prompt: string, _context: ReviewContext): Promise<string> {
+  async generate(prompt: string, _context: ReviewContext, temperature?: number): Promise<string> {
+    const temp = temperature ?? this.defaultTemperature;
     const { text } = await generateText({
       model: this.languageModel,
       prompt,
+      ...(temp !== undefined && { temperature: temp }),
     });
     return text;
   }
@@ -62,6 +69,7 @@ export class UnifiedLLMBackend extends BaseLLMBackend {
     const { text, usage } = await generateText({
       model: this.languageModel,
       prompt,
+      ...(this.defaultTemperature !== undefined && { temperature: this.defaultTemperature }),
     });
     const result = parseReviewResponse(text);
     const tokensUsed = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
@@ -118,31 +126,34 @@ function buildLanguageModel(config: UnifiedLLMConfig): any {
 export function createBackendFromEnv(env: NodeJS.ProcessEnv): UnifiedLLMBackend {
   const provider = (env.LLM_PROVIDER ?? 'ollama') as ProviderName;
   const model = env.LLM_MODEL ?? 'qwen3.5:cloud';
+  const temperature = env.LLM_TEMPERATURE !== undefined ? parseFloat(env.LLM_TEMPERATURE) : 0.2;
 
   switch (provider) {
     case 'openai':
-      return new UnifiedLLMBackend({ provider, model, openAiApiKey: env.OPENAI_API_KEY });
+      return new UnifiedLLMBackend({ provider, model, temperature, openAiApiKey: env.OPENAI_API_KEY });
 
     case 'azure':
       return new UnifiedLLMBackend({
         provider,
         model,
+        temperature,
         azureEndpoint: env.AZURE_OPENAI_ENDPOINT,
         azureApiKey: env.AZURE_OPENAI_API_KEY,
         azureApiVersion: env.AZURE_API_VERSION ?? '2025-01-01-preview',
       });
 
     case 'claude':
-      return new UnifiedLLMBackend({ provider, model, anthropicApiKey: env.ANTHROPIC_API_KEY });
+      return new UnifiedLLMBackend({ provider, model, temperature, anthropicApiKey: env.ANTHROPIC_API_KEY });
 
     case 'custom':
-      return new UnifiedLLMBackend({ provider, model, baseURL: env.CUSTOM_LLM_URL, customApiKey: env.CUSTOM_LLM_API_KEY });
+      return new UnifiedLLMBackend({ provider, model, temperature, baseURL: env.CUSTOM_LLM_URL, customApiKey: env.CUSTOM_LLM_API_KEY });
 
     case 'ollama':
     default:
       return new UnifiedLLMBackend({
         provider: 'ollama',
         model,
+        temperature,
         baseURL: env.OLLAMA_BASE_URL ?? 'http://localhost:11434/v1',
       });
   }

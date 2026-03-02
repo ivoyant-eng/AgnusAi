@@ -10,13 +10,16 @@ import { parsePRDescriptionResponse, parseReviewResponse } from './parser';
 export abstract class BaseLLMBackend {
   abstract readonly name: string;
 
-  /** Send a raw prompt to the provider and return the raw text response. */
-  abstract generate(prompt: string, context: ReviewContext): Promise<string>;
+  /** Send a raw prompt to the provider and return the raw text response.
+   * @param temperature Override the backend's default temperature for this call only.
+   *   Pass 0 for deterministic selection tasks (judge, self-reflection). */
+  abstract generate(prompt: string, context: ReviewContext, temperature?: number): Promise<string>;
 
-  /** Build the structured prompt, call generate(), then parse the response. */
-  async generateReview(context: ReviewContext): Promise<ReviewResult> {
+  /** Build the structured prompt, call generate(), then parse the response.
+   * @param temperature Override the backend's default temperature for this call only. */
+  async generateReview(context: ReviewContext, temperature?: number): Promise<ReviewResult> {
     const prompt = buildReviewPrompt(context);
-    const response = await this.generate(prompt, context);
+    const response = await this.generate(prompt, context, temperature);
     return parseReviewResponse(response);
   }
 
