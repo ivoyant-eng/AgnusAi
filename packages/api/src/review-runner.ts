@@ -248,7 +248,15 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
       enabledAgents: parseEnabledAgents(process.env.ENABLED_AGENTS),
       agentConcurrency: process.env.AGENT_CONCURRENCY ? parseInt(process.env.AGENT_CONCURRENCY, 10) : 2,
       judgeEnabled: (process.env.JUDGE_ENABLED ?? 'true').toLowerCase() !== 'false',
-      judgeMode: (process.env.JUDGE_MODE ?? 'deterministic').toLowerCase() === 'llm' ? 'llm' : 'deterministic',
+      judgeMode: process.env.JUDGE_MODE
+        ? process.env.JUDGE_MODE.toLowerCase() === 'llm' ? 'llm' : 'deterministic'
+        : (process.env.MULTI_AGENT_ENABLED ?? 'false').toLowerCase() === 'true' ? 'llm' : 'deterministic',
+      selfReflectionEnabled: (process.env.SELF_REFLECTION_ENABLED ?? 'false').toLowerCase() === 'true',
+      selfReflectionThreshold: process.env.SELF_REFLECTION_THRESHOLD ? parseInt(process.env.SELF_REFLECTION_THRESHOLD, 10) : 5,
+      splitDetectionEnabled: (process.env.SPLIT_DETECTION_ENABLED ?? 'true').toLowerCase() !== 'false',
+      splitFileThreshold: process.env.SPLIT_FILE_THRESHOLD ? parseInt(process.env.SPLIT_FILE_THRESHOLD, 10) : 15,
+      bestPracticesEnabled: (process.env.BEST_PRACTICES_ENABLED ?? 'true').toLowerCase() !== 'false',
+      bestPracticesMaxChars: process.env.BEST_PRACTICES_MAX_CHARS ? parseInt(process.env.BEST_PRACTICES_MAX_CHARS, 10) : 3000,
     },
     skills: {
       path: SKILLS_PATH,
@@ -482,6 +490,7 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
         line: c.line,
         severity: c.severity,
         confidence: c.confidence,
+        sourceAgent: c.sourceAgent ?? null,
         body: c.body,
       })),
     }
