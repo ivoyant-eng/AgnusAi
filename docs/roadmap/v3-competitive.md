@@ -160,7 +160,7 @@ These are the minimum gaps that block sales to multi-team organizations:
 | --- | -------------------------------------------------------------------------------------------------------- | ------ | ----------- | --------------------------- |
 | 1   | **Multi-organization support** — org entity, per-org webhooks, signup, org-scoped invites                | Large  | ✅ Done     | `docs/plans/multi-org.md`   |
 | 2   | **PR description generation** — auto-write title + walkthrough + type label to PR                        | Medium | ✅ Done     | `docs/plans/pr-describe.md` |
-| 3   | **PR label automation** — security, effort, change type                                                  | Small  | ❌ Todo     | inline with G2              |
+| 3   | **PR label automation** — security, effort, change type                                                  | Small  | ✅ Done     | inline with G2              |
 | 4   | **Inline suggestion validation** — tree-sitter check before posting `suggestion` blocks                  | Small  | ❌ Todo     | inline with G2              |
 | 5   | **Ticket compliance verdict** — structured Fully/Partially/Not Compliant (ticket context already exists) | Small  | 🔶 Partial  | standalone                  |
 
