@@ -182,16 +182,16 @@
     line-height: 1.7;
   }
 
-  /* Graph panel */
+  /* Graph panel — always dark so SVG colors are legible in both light and dark mode */
   .graph-panel {
-    background: var(--lp-card-bg);
-    border: 1px solid var(--lp-border);
+    background: var(--lp-hdr-bg);
+    border: 1px solid var(--lp-hdr-border);
     border-radius: 0;
     overflow: hidden;
   }
   .graph-tbar {
     padding: 10px 14px;
-    border-bottom: 1px solid var(--lp-border);
+    border-bottom: 1px solid var(--lp-hdr-border);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -208,7 +208,7 @@
   }
   .graph-foot {
     padding: 10px 16px;
-    border-top: 1px solid var(--lp-border);
+    border-top: 1px solid var(--lp-hdr-border);
     display: flex;
     gap: 20px;
     flex-wrap: wrap;
@@ -483,6 +483,156 @@
   .cta-install code { color: var(--lp-fg); }
 }
 
+  /* === Section heading helpers === */
+  .sec-h2 {
+    font-family: sans-serif;
+    font-size: clamp(1.8rem, 3vw, 2.6rem);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1.05;
+    color: var(--lp-fg);
+    margin-bottom: 12px;
+  }
+  .sec-sub {
+    font-size: 0.75rem;
+    color: var(--lp-muted);
+    line-height: 1.8;
+    max-width: 560px;
+    margin-bottom: 40px;
+  }
+
+  /* === Two-column section layout === */
+  .two-col-sec {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 72px 32px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 56px;
+    align-items: start;
+  }
+
+  /* === Agents grid (multi-agent section) === */
+  .agents-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    border-top: 1px solid var(--lp-border);
+    border-left: 1px solid var(--lp-border);
+    margin-bottom: 0;
+  }
+  .agent-card {
+    border-right: 1px solid var(--lp-border);
+    border-bottom: 1px solid var(--lp-border);
+    padding: 24px 22px;
+    transition: background 0.12s;
+  }
+  .agent-card:hover { background: var(--lp-muted-bg); }
+  .agent-icon { font-size: 1rem; margin-bottom: 10px; }
+  .agent-name { font-family: sans-serif; font-size: 0.85rem; font-weight: 700; margin-bottom: 6px; }
+  .agent-desc { font-size: 0.7rem; color: var(--lp-muted); line-height: 1.65; margin-bottom: 10px; }
+  .agent-tag {
+    display: inline-block;
+    font-size: 0.55rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--lp-accent);
+    border: 1px solid color-mix(in srgb, var(--lp-accent) 35%, transparent);
+    padding: 2px 6px;
+    border-radius: 0;
+  }
+  .judge-card {
+    border: 1px solid var(--lp-border);
+    border-top: none;
+    padding: 20px 24px;
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    background: var(--lp-card-bg);
+  }
+  .judge-icon { font-size: 1.2rem; flex-shrink: 0; padding-top: 2px; }
+
+  /* === Rules mockup === */
+  .rules-mockup { border: 1px solid var(--lp-border); overflow: hidden; }
+  .rules-mockup-hdr {
+    background: var(--lp-muted-bg);
+    border-bottom: 1px solid var(--lp-border);
+    padding: 9px 14px;
+    font-size: 0.62rem;
+    color: var(--lp-muted);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .rule-row {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--lp-border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: var(--lp-card-bg);
+  }
+  .rule-row:last-child { border-bottom: none; }
+  .rule-name { font-size: 0.7rem; color: var(--lp-fg); min-width: 170px; }
+  .rule-bar-wrap { flex: 1; height: 3px; background: var(--lp-border); }
+  .rule-bar-fill { height: 100%; background: var(--lp-accent); }
+  .rule-pct { font-size: 0.68rem; font-weight: 700; color: var(--lp-fg); min-width: 34px; text-align: right; }
+  .rule-status { font-size: 0.7rem; }
+
+  /* === Ticket section === */
+  .ticket-provider-list { display: flex; gap: 8px; flex-wrap: wrap; margin: 24px 0; }
+  .ticket-provider-badge {
+    font-size: 0.68rem;
+    padding: 5px 12px;
+    border: 1px solid var(--lp-border);
+    background: var(--lp-card-bg);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--lp-fg);
+  }
+
+  /* === FAQ grid === */
+  .faq-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    border-top: 1px solid var(--lp-border);
+    border-left: 1px solid var(--lp-border);
+  }
+  .faq-item {
+    border-right: 1px solid var(--lp-border);
+    border-bottom: 1px solid var(--lp-border);
+    padding: 28px 24px;
+  }
+  .faq-q { font-family: sans-serif; font-size: 0.88rem; font-weight: 700; margin-bottom: 10px; }
+  .faq-a { font-size: 0.72rem; color: var(--lp-muted); line-height: 1.75; }
+
+  /* === Footer === */
+  .lp-footer { background: var(--lp-hdr-bg); border-top: 1px solid var(--lp-hdr-border); }
+  .lp-footer-grid {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 56px 32px 40px;
+    display: grid;
+    grid-template-columns: 2fr 1fr 1fr 1fr;
+    gap: 48px;
+  }
+  .footer-col-label {
+    font-size: 0.58rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, var(--lp-hdr-fg) 30%, transparent);
+    margin-bottom: 14px;
+  }
+  .footer-link {
+    display: block;
+    font-size: 0.7rem;
+    color: color-mix(in srgb, var(--lp-hdr-fg) 50%, transparent);
+    text-decoration: none;
+    margin-bottom: 9px;
+    transition: color 0.12s;
+  }
+  .footer-link:hover { color: var(--lp-hdr-fg); }
+
 /* ── Keyframes (bare, not in @layer) ── */
 @keyframes pulse-op { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
@@ -506,6 +656,8 @@
     grid-template-columns: 1fr;
     gap: 32px;
   }
+  .lp-root .two-col-sec { grid-template-columns: 1fr; gap: 32px; }
+  .lp-root .lp-footer-grid { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 768px) {
@@ -513,20 +665,25 @@
   .lp-root .hero,
   .lp-root .sec,
   .lp-root .trust-inner,
-  .lp-root .cta-sec {
+  .lp-root .cta-sec,
+  .lp-root .two-col-sec {
     padding-left: 20px;
     padding-right: 20px;
   }
   .lp-root .how-grid { grid-template-columns: 1fr; }
   .lp-root .feat-grid { grid-template-columns: 1fr 1fr; }
+  .lp-root .agents-grid { grid-template-columns: 1fr 1fr; }
   .lp-root .testi-grid { grid-template-columns: 1fr; }
   .lp-root .diff-body { grid-template-columns: 1fr; }
   .lp-root .diff-col:first-child { border-right: none; border-bottom: 1px solid var(--lp-border); }
   .lp-root .trust-inner { flex-wrap: wrap; }
   .lp-root .tstat { min-width: 50%; border-bottom: 1px solid var(--lp-border); }
   .lp-root .nav-pill:not(.nav-pill-cta) { display: none; }
+  .lp-root .faq-grid { grid-template-columns: 1fr; }
+  .lp-root .lp-footer-grid { grid-template-columns: 1fr !important; gap: 32px; }
 }
 
 @media (max-width: 480px) {
   .lp-root .feat-grid { grid-template-columns: 1fr; }
+  .lp-root .agents-grid { grid-template-columns: 1fr; }
 }

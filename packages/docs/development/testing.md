@@ -63,7 +63,7 @@ Corrupt a checkpoint to trigger the warning (Fix H):
 node packages/reviewer/dist/cli.js review --pr 123 --repo owner/repo --incremental
 ```
 
-Expected: `[AgnusAI] Malformed checkpoint JSON, falling back to full review. Snippet: "..."`.
+Expected: `[Ryv] Malformed checkpoint JSON, falling back to full review. Snippet: "..."`.
 
 ### 6. Truncated Diff Warning
 
@@ -141,4 +141,4 @@ Expected: JSON with `directCallers`, `transitiveCallers`, `affectedFiles`, `risk
 
 - `pnpm --filter @agnus-ai/<package> build` — zero TypeScript errors
 - Run `--dry-run` on a real PR and inspect the JSON output
-- Check console for unexpected `[AgnusAI]` warnings
+- Check console for unexpected `[Ryv]` warnings

@@ -13,7 +13,7 @@ interface SavedCredential {
   platform: 'github' | 'azure'
 }
 
-const CREDS_KEY = 'agnus:saved_credentials'
+const CREDS_KEY = 'ryv:saved_credentials'
 
 function loadCredentials(): SavedCredential[] {
   try { return JSON.parse(localStorage.getItem(CREDS_KEY) ?? '[]') } catch { return [] }
@@ -114,7 +114,7 @@ export default function Connect() {
         {/* Steps */}
         <div className="border-t border-border">
           {[
-            { n: '01', title: 'Connect', desc: 'Enter your repo URL and a personal access token. AgnusAI uses it to clone and post review comments.' },
+            { n: '01', title: 'Connect', desc: 'Enter your repo URL and a personal access token. Ryv uses it to clone and post review comments.' },
             { n: '02', title: 'Index', desc: 'Tree-sitter WASM parses every file. Symbols and call edges go into Postgres + pgvector.' },
             { n: '03', title: 'Review', desc: 'Every PR webhook triggers a 2-hop BFS. Blast radius is surfaced to the LLM before it writes a single comment.' },
           ].map((s, i) => (
@@ -280,7 +280,7 @@ export default function Connect() {
               onChange={e => setForm(f => ({ ...f, repoPath: e.target.value }))}
             />
             <p className="label-meta">
-              Leave blank — AgnusAI auto-clones using the token above.
+              Leave blank — Ryv auto-clones using the token above.
             </p>
           </div>
 

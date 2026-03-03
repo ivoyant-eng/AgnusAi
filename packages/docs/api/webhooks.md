@@ -1,6 +1,6 @@
 # Webhooks
 
-AgnusAI listens for push and pull request events from GitHub and Azure DevOps.
+Ryv listens for push and pull request events from GitHub and Azure DevOps.
 
 ## GitHub
 

@@ -2,7 +2,7 @@
 layout: home
 
 hero:
-  name: "AgnusAI"
+  name: "Ryv"
   text: "Graph-aware AI code reviewer"
   tagline: Self-hostable. Runs parallel specialist agents. Enforces your team's rules. Understands blast radius.
   actions:
@@ -10,7 +10,7 @@ hero:
       text: Get Started
       link: /guide/hosted-setup
     - theme: alt
-      text: What is AgnusAI?
+      text: What is Ryv?
       link: /guide/what-is-agnusai
     - theme: alt
       text: GitHub

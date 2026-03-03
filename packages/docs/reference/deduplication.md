@@ -1,6 +1,6 @@
 # Smart Deduplication
 
-Before posting a comment, AgnusAI applies several deduplication layers to avoid spamming the PR with redundant feedback.
+Before posting a comment, Ryv applies several deduplication layers to avoid spamming the PR with redundant feedback.
 
 ## Deduplication Layers
 
@@ -10,7 +10,7 @@ If a comment on the same file + line already exists in the PR (from a previous r
 
 ### 2. Dismissed Comment Awareness
 
-If a reviewer dismissed a previous AgnusAI comment (GitHub's "dismiss review" action), the same issue will not be re-raised on the same line.
+If a reviewer dismissed a previous Ryv comment (GitHub's "dismiss review" action), the same issue will not be re-raised on the same line.
 
 ### 3. Binary File Skip
 

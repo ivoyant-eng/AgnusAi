@@ -2,6 +2,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { APP_SHORT } from '@/config/app'
 
 const NAV_ITEMS = [
   { href: '/app', label: 'dashboard' },
@@ -76,7 +77,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 background: 'var(--syn-str)',
               }}
             />
-            <span style={{ fontWeight: 700 }}>~/agnus-ai</span>
+            <span style={{ fontWeight: 700 }}>~/{APP_SHORT.toLowerCase()}</span>
             <span
               className="animate-blink"
               style={{

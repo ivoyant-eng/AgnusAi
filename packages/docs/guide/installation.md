@@ -1,6 +1,6 @@
 # Installation
 
-AgnusAI can be installed in two ways:
+Ryv can be installed in two ways:
 
 ## Option 1: One-Command Installer (Recommended)
 
@@ -74,7 +74,7 @@ If you prefer more control over the setup:
    docker compose up --build
    ```
 
-That's it. AgnusAI will start on port 3000.
+That's it. Ryv will start on port 3000.
 
 ---
 
@@ -106,7 +106,7 @@ After installation, you'll need to:
 
 ## Traefik Gateway
 
-AgnusAI uses Traefik as a reverse proxy/gateway:
+Ryv uses Traefik as a reverse proxy/gateway:
 
 | Service | URL | Description |
 |---------|-----|-------------|

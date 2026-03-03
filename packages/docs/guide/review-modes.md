@@ -1,6 +1,6 @@
 # Review Modes
 
-AgnusAI has three review depth modes. Set `REVIEW_DEPTH` in your `.env` to switch between them.
+Ryv has three review depth modes. Set `REVIEW_DEPTH` in your `.env` to switch between them.
 
 ## Fast
 

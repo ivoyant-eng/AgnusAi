@@ -1,6 +1,6 @@
-# What is AgnusAI?
+# What is Ryv?
 
-AgnusAI is a fully open-source, self-hostable AI code reviewer built for teams who can't — or won't — send their source code to a third-party service.
+Ryv is a fully open-source, self-hostable AI code reviewer built for teams who can't — or won't — send their source code to a third-party service.
 
 It goes far beyond diff-level review: it builds a **symbol dependency graph** of your entire codebase, understands which callers are affected by every change, enforces your team's written standards, and runs parallel specialist agents — all inside your own infrastructure.
 
@@ -13,7 +13,7 @@ Most AI reviewers hand the LLM only the diff. That means:
 - **No governance** — there's no way to enforce "no hardcoded secrets" or "validate inputs at boundaries" as a policy
 - **High noise** — a single pass LLM over a large diff produces many low-confidence findings that slow down developers
 
-AgnusAI addresses all four.
+Ryv addresses all four.
 
 ## How It Works
 
@@ -47,7 +47,7 @@ PR opened / synchronized
 
 ### Graph-aware Blast Radius
 
-AgnusAI parses your codebase with **Tree-sitter WASM** (no language server needed) into a symbol dependency graph stored in Postgres. On every PR, it runs BFS from changed symbols outward — injecting the affected callers, callees, and imports into the review prompt as structured context.
+Ryv parses your codebase with **Tree-sitter WASM** (no language server needed) into a symbol dependency graph stored in Postgres. On every PR, it runs BFS from changed symbols outward — injecting the affected callers, callees, and imports into the review prompt as structured context.
 
 This means the LLM knows: _"this function is called by 12 other modules, 3 of which are in the payment flow."_
 
@@ -55,7 +55,7 @@ Supported languages: TypeScript, JavaScript, Python, Java, Go, C#.
 
 ### Multi-Agent Review
 
-Instead of one LLM pass trying to catch everything, AgnusAI runs **parallel specialist agents** — each with a tightly focused directive:
+Instead of one LLM pass trying to catch everything, Ryv runs **parallel specialist agents** — each with a tightly focused directive:
 
 | Agent | Focus |
 |-------|-------|
@@ -94,7 +94,7 @@ Every comment the LLM generates includes a `[Confidence: X.X]` self-assessment. 
 
 ### Token Usage Tracking
 
-AgnusAI tracks LLM token consumption per agent, per repository, and per day — aggregated at the org level. View usage with custom date ranges in **Settings → Token Usage** or via the API.
+Ryv tracks LLM token consumption per agent, per repository, and per day — aggregated at the org level. View usage with custom date ranges in **Settings → Token Usage** or via the API.
 
 ### Security-first Design
 
@@ -104,7 +104,7 @@ AgnusAI tracks LLM token consumption per agent, per repository, and per day — 
 - **Rate limiting** — configurable global, auth, and webhook rate limits with proxy-aware IP detection
 - **Org-scoped webhook secrets** — each org manages its own signing secrets, rotatable without redeployment
 
-## What AgnusAI Is Not
+## What Ryv Is Not
 
 - **Not a chat interface** — embeddings are for blast-radius expansion and prior-example retrieval, not Q&A
 - **Not a linter replacement** — it catches semantic issues, not formatting or type errors
@@ -112,6 +112,6 @@ AgnusAI tracks LLM token consumption per agent, per repository, and per day — 
 
 ## Hosting
 
-AgnusAI runs as a single Docker Compose stack: the API server (Fastify), Postgres with pgvector, and the React dashboard — all with `docker compose up --build`. Supports GitHub and Azure DevOps webhooks. Bring your own LLM (Ollama, OpenAI, Azure, Claude, or any OpenAI-compatible endpoint).
+Ryv runs as a single Docker Compose stack: the API server (Fastify), Postgres with pgvector, and the React dashboard — all with `docker compose up --build`. Supports GitHub and Azure DevOps webhooks. Bring your own LLM (Ollama, OpenAI, Azure, Claude, or any OpenAI-compatible endpoint).
 
 → [Get started with the hosted service](/guide/hosted-setup)

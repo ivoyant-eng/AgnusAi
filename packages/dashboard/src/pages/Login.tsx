@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/hooks/useAuth'
+import { APP_SHORT } from '@/config/app'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -116,12 +117,18 @@ export default function Login() {
       <div className="w-full max-w-md">
         {/* Brand */}
         <div className="flex items-center gap-2 mb-12">
-          <span className="bg-[#E85A1A] text-white text-xs tracking-widest uppercase px-2 py-0.5">
-            AgnusAI
-          </span>
-          <span className="text-[10px] tracking-widest uppercase text-muted-foreground/60">
-            Code Review
-          </span>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '8px',
+          }}>
+            <div style={{
+              width: '28px', height: '28px',
+              background: '#E85A1A',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <span style={{ fontFamily: 'sans-serif', fontWeight: 800, fontSize: '0.85rem', color: '#fff' }}>R</span>
+            </div>
+            <span style={{ fontFamily: 'sans-serif', fontWeight: 800, fontSize: '1.1rem', letterSpacing: '-0.02em' }}>{APP_SHORT}</span>
+          </div>
         </div>
 
         <h1 className="text-4xl font-bold leading-none tracking-tight text-foreground mb-10">
@@ -204,7 +211,7 @@ export default function Login() {
             type="submit"
             size="lg"
             disabled={loading || (isSignup && checkingOrg)}
-            className="w-full gap-3 bg-[#E85A1A] hover:bg-[#d14e17] text-white border-0"
+            className="w-full gap-3"
           >
             {loading
               ? (isInviteRegister || isSignup ? 'Creating account...' : 'Signing in...')

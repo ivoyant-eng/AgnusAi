@@ -1,6 +1,6 @@
 # Monorepo Layers
 
-AgnusAI is built in layers. Each layer is independently runnable and tested before the next is built.
+Ryv is built in layers. Each layer is independently runnable and tested before the next is built.
 
 ## Layer 0 — CLI Reviewer ✅
 
