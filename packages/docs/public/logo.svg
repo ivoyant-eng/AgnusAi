@@ -1,19 +1,17 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="gl" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#2563EB"/>
       <stop offset="100%" stop-color="#06B6D4"/>
     </linearGradient>
   </defs>
-  <!-- Background -->
-  <rect width="32" height="32" rx="7" fill="#0B1120"/>
-  <!-- R lettermark -->
+  <rect width="30" height="30" rx="7" fill="url(#gl)"/>
   <text
-    x="16" y="23"
+    x="15" y="22"
     text-anchor="middle"
     font-family="system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif"
     font-weight="900"
-    font-size="20"
-    fill="url(#g)"
+    font-size="18"
+    fill="#FFFFFF"
   >R</text>
 </svg>

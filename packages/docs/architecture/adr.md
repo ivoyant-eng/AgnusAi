@@ -6,7 +6,7 @@
 
 ## Context
 
-AgnusAI is an AI-powered PR review agent that:
+Ryv is an AI-powered PR review agent that:
 - Reviews pull requests on **GitHub** and **Azure DevOps**
 - Posts **rich inline comments** on specific diff lines with severity, steps of reproduction, and AI fix prompts
 - Uses **Vercel AI SDK** with a unified backend supporting Ollama, OpenAI, Azure OpenAI, and any OpenAI-compatible endpoint

@@ -77,7 +77,7 @@ curl -N -b /tmp/agnus.txt \
 
 ## Organizations
 
-AgnusAI is multi-tenant. Every deployment starts with a single **default** org. All repos, members, webhooks, and rules belong to an org.
+Ryv is multi-tenant. Every deployment starts with a single **default** org. All repos, members, webhooks, and rules belong to an org.
 
 | Concept | Description |
 |---------|-------------|

@@ -30,7 +30,7 @@ patterns:
 
 ## Built-in Skills
 
-AgnusAI ships with three built-in skills in `packages/reviewer/skills/`:
+Ryv ships with three built-in skills in `packages/reviewer/skills/`:
 
 | Skill | Patterns | Focus |
 |-------|----------|-------|

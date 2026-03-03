@@ -3,8 +3,8 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   // Custom theme: packages/docs/.vitepress/theme/custom.css
   // Edit CSS vars in that file to change colors, fonts, border radius, etc.
-  title: 'AgnusAI',
-  description: 'Open-source, self-hostable AI code reviewer with graph-aware blast radius analysis',
+  title: 'Ryv AI',
+  description: 'Ryv AI — open-source, self-hostable AI code reviewer with graph-aware blast radius analysis, multi-agent review, and rules enforcement. Self-hosted, MIT licensed.',
   base: '/docs/',
 
   head: [
@@ -13,7 +13,7 @@ export default defineConfig({
 
   themeConfig: {
     logo: '/logo.svg',
-    siteTitle: 'AgnusAI',
+    siteTitle: 'Ryv AI',
 
     nav: [
       { text: 'Guide', link: '/guide/what-is-agnusai' },
@@ -26,7 +26,7 @@ export default defineConfig({
       {
         text: 'Getting Started',
         items: [
-          { text: 'What is AgnusAI?', link: '/guide/what-is-agnusai' },
+          { text: 'What is Ryv?', link: '/guide/what-is-agnusai' },
           { text: 'Hosted Service Setup', link: '/guide/hosted-setup' },
           { text: 'Docker Compose', link: '/guide/docker' },
           { text: 'Environment Variables', link: '/guide/env-vars' },
@@ -115,7 +115,7 @@ export default defineConfig({
 
     footer: {
       message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2025-present AgnusAI contributors',
+      copyright: 'Copyright © 2025-present Ryv AI contributors',
     },
 
     editLink: {

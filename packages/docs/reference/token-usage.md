@@ -1,6 +1,6 @@
 # Token Usage
 
-AgnusAI tracks LLM token consumption per agent run and aggregates it at the org level so you can monitor costs, understand usage patterns, and plan capacity.
+Ryv tracks LLM token consumption per agent run and aggregates it at the org level so you can monitor costs, understand usage patterns, and plan capacity.
 
 ## What Is Tracked
 

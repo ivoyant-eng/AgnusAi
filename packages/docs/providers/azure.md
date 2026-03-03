@@ -28,7 +28,7 @@ AZURE_API_VERSION=2025-01-01-preview   # optional — this is the default
 
 ## Azure Embeddings
 
-AgnusAI has a native `azure` embedding provider — no workarounds needed.
+Ryv has a native `azure` embedding provider — no workarounds needed.
 
 ```bash
 EMBEDDING_PROVIDER=azure

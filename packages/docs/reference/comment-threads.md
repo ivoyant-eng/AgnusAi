@@ -1,14 +1,14 @@
 # Comment Reply Threads
 
-AgnusAI can respond to replies on its own review comments, maintaining a conversation thread directly in the PR.
+Ryv can respond to replies on its own review comments, maintaining a conversation thread directly in the PR.
 
 ## How It Works
 
-1. AgnusAI posts an inline review comment on a PR
+1. Ryv posts an inline review comment on a PR
 2. A developer replies to that comment
 3. GitHub sends a `pull_request_review_comment` webhook event
-4. AgnusAI detects that the reply is on one of its own comments
-5. AgnusAI generates a context-aware response and posts it in the thread
+4. Ryv detects that the reply is on one of its own comments
+5. Ryv generates a context-aware response and posts it in the thread
 
 ## Setup
 

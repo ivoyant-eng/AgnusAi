@@ -30,11 +30,11 @@ This page tracks all identified blindspots — root causes of false positives (h
 
 ---
 
-### C — `isCommentDismissed()` dismissed AgnusAI's own comments ✅
+### C — `isCommentDismissed()` dismissed Ryv's own comments ✅
 
-**Symptom:** AgnusAI comments containing words like "nit" or "fixed" in their body were marked as dismissed and never re-posted.
+**Symptom:** Ryv comments containing words like "nit" or "fixed" in their body were marked as dismissed and never re-posted.
 
-**Root cause:** `isCommentDismissed()` was checking the AgnusAI comment's own body for dismissal keywords instead of checking user reply comments.
+**Root cause:** `isCommentDismissed()` was checking the Ryv comment's own body for dismissal keywords instead of checking user reply comments.
 
 **Fix:** Changed to `isCommentDismissed(comment, allComments)`. Now finds replies where `c.inReplyToId === comment.id` and checks those bodies.
 
@@ -100,7 +100,7 @@ This page tracks all identified blindspots — root causes of false positives (h
 
 **Root cause:** `catch {}` in `parseCheckpoint` was empty.
 
-**Fix:** `catch (error)` now logs `[AgnusAI] Malformed checkpoint JSON, falling back to full review. Snippet: "..."`.
+**Fix:** `catch (error)` now logs `[Ryv] Malformed checkpoint JSON, falling back to full review. Snippet: "..."`.
 
 **File:** `packages/reviewer/src/review/checkpoint.ts`
 
