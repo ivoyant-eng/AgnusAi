@@ -122,13 +122,12 @@ export default function Login() {
           }}>
             <div style={{
               width: '28px', height: '28px',
-              background: 'linear-gradient(135deg, #2563EB 0%, #06B6D4 100%)',
-              borderRadius: '7px',
+              background: '#E85A1A',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>
-              <span style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 800, fontSize: '0.85rem', color: '#fff' }}>R</span>
+              <span style={{ fontFamily: 'sans-serif', fontWeight: 800, fontSize: '0.85rem', color: '#fff' }}>R</span>
             </div>
-            <span style={{ fontFamily: 'Outfit, sans-serif', fontWeight: 800, fontSize: '1.1rem', letterSpacing: '-0.02em' }}>{APP_SHORT}</span>
+            <span style={{ fontFamily: 'sans-serif', fontWeight: 800, fontSize: '1.1rem', letterSpacing: '-0.02em' }}>{APP_SHORT}</span>
           </div>
         </div>
 
