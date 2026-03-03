@@ -4,40 +4,43 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <!-- Favicon — terminal prompt icon -->
+    <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 
-    <!-- Primary meta -->
-    <title>AgnusAI — Graph-Aware AI Code Review</title>
-    <meta name="description" content="AgnusAI indexes your codebase with Tree-sitter, builds a symbol dependency graph, and reviews every PR with full blast-radius context. Self-hosted, MIT licensed." />
-    <meta name="keywords" content="AI code review, graph-aware, blast radius, Tree-sitter, self-hosted, open source, pull request, code analysis" />
-    <meta name="author" content="AgnusAI" />
-    <meta name="theme-color" content="#131312" />
+    <!-- Fonts: Outfit (display) + DM Sans (body) + JetBrains Mono (code) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800;900&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
 
-    <!-- Set theme before React loads to avoid flash of wrong theme.
-         Default is dark unless user has explicitly saved 'light'. -->
+    <!-- Primary meta -->
+    <title>Ryv — AI Code Review That Sees the Whole Picture</title>
+    <meta name="description" content="Ryv builds a live symbol dependency graph of your codebase and uses it to deliver context-rich, graph-aware code reviews on every PR. Self-hosted, MIT licensed." />
+    <meta name="keywords" content="AI code review, graph-aware, blast radius, Tree-sitter, self-hosted, open source, pull request, code analysis, Ryv" />
+    <meta name="author" content="Ryv AI" />
+    <meta name="theme-color" content="#080D1C" />
+
+    <!-- Set theme before React loads to avoid flash of wrong theme. -->
     <script>
       (function(){
-        var t = localStorage.getItem('agnus-theme');
+        var t = localStorage.getItem('ryv-theme');
         if (t !== 'light') document.documentElement.setAttribute('data-theme','dark');
       })();
     </script>
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://agnusai.dev/" />
-    <meta property="og:title" content="AgnusAI — Graph-Aware AI Code Review" />
-    <meta property="og:description" content="AI reviews that see the whole picture. 2-hop BFS blast-radius analysis, Tree-sitter parsing, self-hosted with Ollama or any LLM." />
+    <meta property="og:url" content="https://ryv.ai/" />
+    <meta property="og:title" content="Ryv — AI Code Review That Sees the Whole Picture" />
+    <meta property="og:description" content="Graph-aware AI code review. 2-hop BFS blast-radius analysis, Tree-sitter parsing, self-hosted with Ollama or any LLM." />
     <meta property="og:image" content="/og-image.png" />
     <meta property="og:image:width" content="1512" />
     <meta property="og:image:height" content="782" />
-    <meta property="og:image:alt" content="AgnusAI landing page showing the hero section with graph visualization" />
-    <meta property="og:site_name" content="AgnusAI" />
+    <meta property="og:site_name" content="Ryv AI" />
 
     <!-- Twitter / X card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="AgnusAI — Graph-Aware AI Code Review" />
-    <meta name="twitter:description" content="AI reviews that see the whole picture. 2-hop BFS blast-radius analysis, Tree-sitter parsing, self-hosted with Ollama or any LLM." />
+    <meta name="twitter:title" content="Ryv — AI Code Review That Sees the Whole Picture" />
+    <meta name="twitter:description" content="Graph-aware AI code review. 2-hop BFS blast-radius analysis, Tree-sitter parsing, self-hosted with Ollama or any LLM." />
     <meta name="twitter:image" content="/og-image.png" />
   </head>
   <body>

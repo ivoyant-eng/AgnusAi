@@ -36,9 +36,14 @@ module.exports = {
         },
       },
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
+        sans: ['DM Sans', 'system-ui', 'sans-serif'],
+        display: ['Outfit', 'system-ui', 'sans-serif'],
         mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
-        display: [ 'sans-serif'],
+      },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
       },
       letterSpacing: {
         widest: '0.2em',
@@ -47,9 +52,11 @@ module.exports = {
       animation: {
         'accordion-down': 'accordion-down 0.2s ease-out',
         'accordion-up': 'accordion-up 0.2s ease-out',
-        ticker: 'ticker 30s linear infinite',
+        ticker: 'ticker 35s linear infinite',
         'ticker-32': 'ticker 32s linear infinite',
         blink: 'blink 1.1s step-end infinite',
+        'fade-up': 'fade-up 0.6s ease-out forwards',
+        'pulse-dot': 'pulse-dot 2s ease-in-out infinite',
       },
       keyframes: {
         'accordion-down': {
@@ -67,6 +74,14 @@ module.exports = {
         blink: {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0' },
+        },
+        'fade-up': {
+          from: { opacity: '0', transform: 'translateY(16px)' },
+          to: { opacity: '1', transform: 'translateY(0)' },
+        },
+        'pulse-dot': {
+          '0%, 100%': { opacity: '1', transform: 'scale(1)' },
+          '50%': { opacity: '0.5', transform: 'scale(0.85)' },
         },
       },
     },

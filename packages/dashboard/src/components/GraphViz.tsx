@@ -1,14 +1,15 @@
 import { useEffect, useRef } from 'react'
 
 // All SVG colors as explicit inline styles — avoids CSS cascade / SVG inheritance issues
+// Colors tuned for dark background (hero section is always dark #0B1120)
 const C = {
-  accent:      '#E85A1A',
+  accent:      '#2563EB',                   // Ryv blue
   accentFg:    '#FFFFFF',
-  fg:          '#1C1C1A',
-  muted:       '#8A8880',
-  cardBg:      '#E8E6E0',  // slightly darker than page bg for normal nodes
-  nodeBorder:  '#B8B5AF',
-  affectedBg:  '#FDF6F2',  // very light orange tint for affected nodes
+  fg:          '#F1F5F9',                   // Light text on dark bg
+  muted:       'rgba(248,250,252,0.35)',     // Muted light for dark bg
+  cardBg:      'rgba(255,255,255,0.07)',     // Translucent for normal nodes
+  nodeBorder:  'rgba(255,255,255,0.18)',     // Subtle border on dark bg
+  affectedBg:  'rgba(37,99,235,0.18)',       // Blue tint for affected nodes
 }
 
 export function GraphViz() {
