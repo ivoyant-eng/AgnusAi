@@ -58,7 +58,7 @@ export default function Ready() {
           {
             n: '02',
             title: 'Open a Pull Request',
-            desc: 'AgnusAI fetches the diff, assembles graph context, and posts a review.',
+            desc: 'Ryv fetches the diff, assembles graph context, and posts a review.',
           },
           {
             n: '03',
