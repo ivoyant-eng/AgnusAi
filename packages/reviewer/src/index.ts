@@ -211,18 +211,16 @@ export class PRReviewAgent {
     const changedFilePaths = new Set(incrementalResult.diff.files.map(f => f.path));
     const relevantFiles = files.filter(f => changedFilePaths.has(f.path));
 
-    // Get linked tickets (opt-in — ticket integration is behind a feature flag)
+    // Get linked tickets
+    const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
     const tickets = [];
-    if (this.config.review?.ticketFetchEnabled) {
-      const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
-      for (const adapter of this.tickets) {
-        for (const id of linkedTicketIds) {
-          try {
-            const ticket = await adapter.getTicket(id.key);
-            tickets.push(ticket);
-          } catch {
-            // Ticket not found in this adapter
-          }
+    for (const adapter of this.tickets) {
+      for (const id of linkedTicketIds) {
+        try {
+          const ticket = await adapter.getTicket(id.key);
+          tickets.push(ticket);
+        } catch {
+          // Ticket not found
         }
       }
     }
@@ -337,18 +335,16 @@ export class PRReviewAgent {
     const diff = await this.vcs.getDiff(prId);
     const files = await this.vcs.getFiles(prId);
 
-    // 2. Get linked tickets (opt-in — ticket integration is behind a feature flag)
+    // 2. Get linked tickets
+    const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
     const tickets = [];
-    if (this.config.review?.ticketFetchEnabled) {
-      const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
-      for (const adapter of this.tickets) {
-        for (const id of linkedTicketIds) {
-          try {
-            const ticket = await adapter.getTicket(id.key);
-            tickets.push(ticket);
-          } catch {
-            // Ticket not found in this adapter
-          }
+    for (const adapter of this.tickets) {
+      for (const id of linkedTicketIds) {
+        try {
+          const ticket = await adapter.getTicket(id.key);
+          tickets.push(ticket);
+        } catch {
+          // Ticket not found in this adapter
         }
       }
     }

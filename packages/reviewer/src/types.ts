@@ -204,8 +204,6 @@ export interface ReviewConfig {
   bestPracticesEnabled?: boolean;
   /** Max characters to include from best_practices.md files (default: 3000) */
   bestPracticesMaxChars?: number;
-  /** Fetch linked tickets from the VCS/ticket system and inject into prompt (default: false) */
-  ticketFetchEnabled?: boolean;
 }
 
 export interface Skill {
