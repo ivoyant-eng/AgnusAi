@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'fs'
-import { exec } from 'child_process'
+import { exec, type ExecException } from 'child_process'
 import { promisify } from 'util'
 import crypto from 'crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -13,6 +13,7 @@ import { createDefaultRegistry, Indexer, InMemorySymbolGraph, PostgresStorageAda
 import type { IndexProgress } from '@agnus-ai/shared'
 import { loadRepo, getOrLoadRepo, evictRepo } from '../graph-cache'
 import { createEmbeddingAdapter } from '../embedding-factory'
+import { resolveCloneToken, buildAuthenticatedUrl } from '../git-utils'
 import { requireAuth, requireOrgAdmin } from '../auth/middleware'
 import { isVcsPlatform, type AuthJwtClaims, type VcsPlatform } from '../auth/types'
 import { runReview } from '../review-runner'
@@ -58,13 +59,13 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     const orgId = activeOrg(req)
     const { rows } = isSystemAdmin(req) && !orgId
       ? await pool.query(
-          'SELECT repo_id, repo_url, platform, repo_path, indexed_at, symbol_count, created_at FROM repos ORDER BY created_at DESC',
+          'SELECT repo_id, repo_url, platform, repo_path, indexed_at, symbol_count, created_at, github_app_id, github_app_installation_id, vcs_installation_id FROM repos ORDER BY created_at DESC',
         )
       : await pool.query(
-          'SELECT repo_id, repo_url, platform, repo_path, indexed_at, symbol_count, created_at FROM repos WHERE org_id = $1 ORDER BY created_at DESC',
+          'SELECT repo_id, repo_url, platform, repo_path, indexed_at, symbol_count, created_at, github_app_id, github_app_installation_id, vcs_installation_id FROM repos WHERE org_id = $1 ORDER BY created_at DESC',
           [orgId],
         )
-    return reply.send(rows.map(r => ({
+    return reply.send(rows.map((r: any) => ({
       repoId: r.repo_id,
       repoUrl: r.repo_url,
       platform: r.platform,
@@ -72,6 +73,9 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
       indexedAt: r.indexed_at,
       symbolCount: r.symbol_count ?? 0,
       createdAt: r.created_at,
+      githubAppId: r.github_app_id ?? null,
+      githubAppInstallationId: r.github_app_installation_id ?? null,
+      vcsInstallationId: r.vcs_installation_id ?? null,
     })))
   })
 
@@ -411,12 +415,17 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/repos', { preHandler: [requireAuth] }, async (req, reply) => {
     const orgId = activeOrg(req)
     if (!orgId) return reply.status(400).send({ error: 'Active org is required' })
-    const { repoUrl, platform, token, repoPath, branches } = req.body as {
+    const { repoUrl, platform, token, repoPath, branches, vcsInstallationId,
+            githubAppId: rawGithubAppId, githubAppPrivateKey: rawGithubAppPrivateKey, githubAppInstallationId: rawGithubAppInstallationId } = req.body as {
       repoUrl: string
       platform: VcsPlatform
       token?: string
       repoPath?: string
       branches?: string[]
+      vcsInstallationId?: string
+      githubAppId?: string
+      githubAppPrivateKey?: string
+      githubAppInstallationId?: string
     }
 
     if (!repoUrl || !isVcsPlatform(platform)) {
@@ -427,6 +436,22 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     // Derive a stable repoId from the URL
     const repoId = Buffer.from(`${orgId}:${repoUrl}`).toString('base64url').slice(0, 32)
+
+    // If connecting via a saved VCS installation, pull credentials from it
+    let githubAppId = rawGithubAppId
+    let githubAppPrivateKey = rawGithubAppPrivateKey
+    let githubAppInstallationId = rawGithubAppInstallationId
+    if (vcsInstallationId) {
+      const { rows: instRows } = await pool.query(
+        `SELECT github_app_id, github_app_private_key, github_app_installation_id
+         FROM vcs_installations WHERE id = $1 AND org_id = $2`,
+        [vcsInstallationId, orgId],
+      )
+      if (!instRows[0]) return reply.status(404).send({ error: 'VCS installation not found' })
+      githubAppId = instRows[0].github_app_id
+      githubAppPrivateKey = instRows[0].github_app_private_key
+      githubAppInstallationId = instRows[0].github_app_installation_id
+    }
 
     // Ensure repos table exists and upsert the registration
     await pool.query(`
@@ -444,10 +469,20 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     `)
     await pool.query(`ALTER TABLE repos ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`)
     await pool.query(
-      `INSERT INTO repos (repo_id, repo_url, platform, token, repo_path, org_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (repo_id) DO UPDATE SET token = EXCLUDED.token, repo_path = EXCLUDED.repo_path`,
-      [repoId, repoUrl, platform, token ?? null, repoPath ?? null, orgId],
+      `INSERT INTO repos (repo_id, repo_url, platform, token, repo_path, org_id,
+                          github_app_id, github_app_private_key, github_app_installation_id,
+                          vcs_installation_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (repo_id) DO UPDATE SET
+         token = EXCLUDED.token,
+         repo_path = EXCLUDED.repo_path,
+         github_app_id = EXCLUDED.github_app_id,
+         github_app_private_key = EXCLUDED.github_app_private_key,
+         github_app_installation_id = EXCLUDED.github_app_installation_id,
+         vcs_installation_id = EXCLUDED.vcs_installation_id`,
+      [repoId, repoUrl, platform, token ?? null, repoPath ?? null, orgId,
+       githubAppId ?? null, githubAppPrivateKey ?? null, githubAppInstallationId ?? null,
+       vcsInstallationId ?? null],
     )
 
     // Ensure repo_branches table exists and insert branch registrations
@@ -467,7 +502,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     // Trigger full index in background
     setImmediate(() => {
-      runFullIndex(pool, repoId, repoPath ?? null, indexBranches, repoUrl, token)
+      runFullIndex(pool, repoId, repoPath ?? null, indexBranches, repoUrl, token,
+        githubAppId, githubAppPrivateKey, githubAppInstallationId)
     })
 
     return reply.status(202).send({
@@ -486,8 +522,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     const { rows } = await pool.query(
       isSystemAdmin(req) && !orgId
-        ? 'SELECT repo_url, repo_path, token FROM repos WHERE repo_id = $1'
-        : 'SELECT repo_url, repo_path, token FROM repos WHERE repo_id = $1 AND org_id = $2',
+        ? 'SELECT repo_url, repo_path, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1'
+        : 'SELECT repo_url, repo_path, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1 AND org_id = $2',
       isSystemAdmin(req) && !orgId ? [repoId] : [repoId, orgId],
     )
     if (rows.length === 0) {
@@ -509,7 +545,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     )
 
     setImmediate(() => {
-      runFullIndex(pool, repoId, rows[0].repo_path, branches, rows[0].repo_url, rows[0].token)
+      const r = rows[0] as any
+      runFullIndex(pool, repoId, r.repo_path, branches, r.repo_url, r.token, r.github_app_id, r.github_app_private_key, r.github_app_installation_id)
     })
 
     return reply.status(202).send({
@@ -593,15 +630,15 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     const { rows } = await pool.query(
       isSystemAdmin(req) && !orgId
-        ? 'SELECT repo_url, platform, token FROM repos WHERE repo_id = $1'
-        : 'SELECT repo_url, platform, token FROM repos WHERE repo_id = $1 AND org_id = $2',
+        ? 'SELECT repo_url, platform, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1'
+        : 'SELECT repo_url, platform, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1 AND org_id = $2',
       isSystemAdmin(req) && !orgId ? [repoId] : [repoId, orgId],
     )
     if (rows.length === 0) {
       return reply.status(404).send({ error: 'Repo not found' })
     }
 
-    const { repo_url: repoUrl, platform, token } = rows[0]
+    const { repo_url: repoUrl, platform, token, github_app_id, github_app_private_key, github_app_installation_id } = rows[0] as any
 
     // Run review synchronously so the caller gets the result
     try {
@@ -612,6 +649,9 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
         prNumber,
         baseBranch,
         token: token ?? undefined,
+        githubAppId: github_app_id ?? undefined,
+        githubAppPrivateKey: github_app_private_key ?? undefined,
+        githubAppInstallationId: github_app_installation_id ?? undefined,
         pool,
         dryRun,
       })
@@ -623,6 +663,219 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
       console.error(`[repos] Manual review failed for PR ${prNumber}:`, msg)
       return reply.status(500).send({ error: msg })
     }
+  })
+
+  // ── VCS Installation routes ────────────────────────────────────────────────
+
+  /** GET /api/vcs-installations — list saved installations for the active org */
+  app.get('/api/vcs-installations', { preHandler: [requireAuth] }, async (req, reply) => {
+    const orgId = activeOrg(req)
+    if (!orgId) return reply.status(403).send({ error: 'No active org' })
+    const { rows } = await pool.query(
+      `SELECT id, platform, display_name, account_login, account_type,
+              github_app_id, github_app_installation_id,
+              azure_client_id, azure_tenant_id, azure_org_url,
+              created_at
+       FROM vcs_installations WHERE org_id = $1 ORDER BY created_at ASC`,
+      [orgId],
+    )
+    return reply.send({ installations: rows })
+  })
+
+  /** POST /api/vcs-installations — save a new installation, validate credentials */
+  app.post('/api/vcs-installations', { preHandler: [requireAuth] }, async (req, reply) => {
+    const orgId = activeOrg(req)
+    if (!orgId) return reply.status(403).send({ error: 'No active org' })
+    const { platform, displayName, appId, privateKey, installationId } = req.body as {
+      platform: string
+      displayName?: string
+      appId?: string
+      privateKey?: string
+      installationId?: string
+    }
+    if (!platform) return reply.status(400).send({ error: 'platform is required' })
+
+    let accountLogin: string | null = null
+    let accountType: string | null = null
+
+    if (platform === 'github') {
+      if (!appId || !privateKey || !installationId) {
+        return reply.status(400).send({ error: 'appId, privateKey, and installationId are required for GitHub' })
+      }
+      try {
+        const { Octokit } = await import('@octokit/rest')
+        const { createAppAuth } = await import('@octokit/auth-app')
+        const octokit = new Octokit({
+          authStrategy: createAppAuth,
+          auth: { appId, privateKey, installationId: Number(installationId) },
+        })
+        const { data } = await octokit.apps.getInstallation({ installation_id: Number(installationId) })
+        accountLogin = (data.account as { login?: string })?.login ?? null
+        accountType = (data.account as { type?: string })?.type ?? null
+      } catch (err) {
+        return reply.status(400).send({ error: `GitHub credentials invalid: ${(err as Error).message}` })
+      }
+    }
+
+    const { rows } = await pool.query(
+      `INSERT INTO vcs_installations
+         (org_id, platform, display_name, account_login, account_type,
+          github_app_id, github_app_private_key, github_app_installation_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       RETURNING id, platform, display_name, account_login, account_type,
+                 github_app_id, github_app_installation_id, created_at`,
+      [orgId, platform, displayName ?? accountLogin ?? null,
+       accountLogin, accountType, appId ?? null, privateKey ?? null, installationId ?? null],
+    )
+    return reply.status(201).send({ installation: rows[0] })
+  })
+
+  /** DELETE /api/vcs-installations/:id — remove a saved installation */
+  app.delete('/api/vcs-installations/:id', { preHandler: [requireAuth] }, async (req, reply) => {
+    const orgId = activeOrg(req)
+    if (!orgId) return reply.status(403).send({ error: 'No active org' })
+    const { id } = req.params as { id: string }
+    const { rowCount } = await pool.query(
+      'DELETE FROM vcs_installations WHERE id = $1 AND org_id = $2',
+      [id, orgId],
+    )
+    if (!rowCount) return reply.status(404).send({ error: 'Installation not found' })
+    return reply.send({ ok: true })
+  })
+
+  /** POST /api/vcs-installations/:id/repos — list repos for a saved installation */
+  app.post('/api/vcs-installations/:id/repos', { preHandler: [requireAuth] }, async (req, reply) => {
+    const orgId = activeOrg(req)
+    if (!orgId) return reply.status(403).send({ error: 'No active org' })
+    const { id } = req.params as { id: string }
+    const { rows } = await pool.query(
+      `SELECT platform, github_app_id, github_app_private_key, github_app_installation_id
+       FROM vcs_installations WHERE id = $1 AND org_id = $2`,
+      [id, orgId],
+    )
+    if (!rows[0]) return reply.status(404).send({ error: 'Installation not found' })
+    const inst = rows[0]
+
+    if (inst.platform === 'github') {
+      try {
+        const { Octokit } = await import('@octokit/rest')
+        const { createAppAuth } = await import('@octokit/auth-app')
+        const octokit = new Octokit({
+          authStrategy: createAppAuth,
+          auth: {
+            appId: inst.github_app_id,
+            privateKey: inst.github_app_private_key,
+            installationId: Number(inst.github_app_installation_id),
+          },
+        })
+        const [installationRes, allRepos] = await Promise.all([
+          octokit.apps.getInstallation({ installation_id: Number(inst.github_app_installation_id) }),
+          octokit.paginate(octokit.apps.listReposAccessibleToInstallation, { per_page: 100 }),
+        ])
+        const installation = installationRes.data
+        const repos = allRepos.map((r: { id: number; name: string; full_name: string; html_url: string; private: boolean; description?: string | null }) => ({
+          id: r.id,
+          name: r.name,
+          fullName: r.full_name,
+          url: r.html_url,
+          private: r.private,
+          description: r.description ?? null,
+        }))
+        return reply.send({
+          repos,
+          installation: {
+            accountLogin: (installation.account as { login?: string })?.login ?? null,
+            accountType: (installation.account as { type?: string })?.type ?? null,
+            repositorySelection: installation.repository_selection,
+          },
+        })
+      } catch (err) {
+        return reply.status(400).send({ error: (err as Error).message })
+      }
+    }
+
+    return reply.status(400).send({ error: `Repo listing not yet supported for platform: ${inst.platform}` })
+  })
+
+  /**
+   * POST /api/github-app/repos — list repos accessible to a GitHub App installation (auth required)
+   * Body: { appId, privateKey, installationId }
+   * Returns up to 100 repos the installation has access to.
+   */
+  app.post('/api/github-app/repos', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { appId, privateKey, installationId } = req.body as {
+      appId: string
+      privateKey: string
+      installationId: string
+    }
+    if (!appId || !privateKey || !installationId) {
+      return reply.status(400).send({ error: 'appId, privateKey, and installationId are required' })
+    }
+    try {
+      const { Octokit } = await import('@octokit/rest')
+      const { createAppAuth } = await import('@octokit/auth-app')
+      const octokit = new Octokit({
+        authStrategy: createAppAuth,
+        auth: { appId, privateKey, installationId: Number(installationId) },
+      })
+      // Fetch installation info and all repos (paginated) in parallel
+      const [installationRes, allRepos] = await Promise.all([
+        octokit.apps.getInstallation({ installation_id: Number(installationId) }),
+        octokit.paginate(octokit.apps.listReposAccessibleToInstallation, { per_page: 100 }),
+      ])
+      const installation = installationRes.data
+      const repos = allRepos.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        fullName: r.full_name,
+        url: r.html_url,
+        private: r.private,
+        description: r.description ?? null,
+      }))
+      return reply.send({
+        repos,
+        installation: {
+          accountLogin: (installation.account as any)?.login ?? null,
+          accountType: (installation.account as any)?.type ?? null,
+          repositorySelection: installation.repository_selection,
+        },
+      })
+    } catch (err: any) {
+      const msg = err?.message ?? 'Failed to list repositories'
+      return reply.status(400).send({ error: msg })
+    }
+  })
+
+  /**
+   * POST /api/repos/:id/github-app — add or update GitHub App credentials on an existing repo (auth required)
+   * Body: { appId, privateKey, installationId }
+   */
+  app.post('/api/repos/:id/github-app', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { id: repoId } = req.params as { id: string }
+    const orgId = activeOrg(req)
+    const exists = await pool.query(
+      isSystemAdmin(req) && !orgId
+        ? 'SELECT 1 FROM repos WHERE repo_id = $1'
+        : 'SELECT 1 FROM repos WHERE repo_id = $1 AND org_id = $2',
+      isSystemAdmin(req) && !orgId ? [repoId] : [repoId, orgId],
+    )
+    if (exists.rows.length === 0) return reply.status(404).send({ error: 'Repo not found' })
+
+    const { appId, privateKey, installationId } = req.body as {
+      appId: string
+      privateKey: string
+      installationId: string
+    }
+    if (!appId || !privateKey || !installationId) {
+      return reply.status(400).send({ error: 'appId, privateKey, and installationId are required' })
+    }
+
+    await pool.query(
+      `UPDATE repos SET github_app_id = $1, github_app_private_key = $2, github_app_installation_id = $3 WHERE repo_id = $4`,
+      [appId, privateKey, installationId, repoId],
+    )
+
+    return reply.send({ ok: true, repoId, githubAppId: appId, githubAppInstallationId: installationId })
   })
 
   /**
@@ -964,6 +1217,9 @@ async function runFullIndex(
   indexBranches: string[],
   repoUrl?: string,
   token?: string | null,
+  githubAppId?: string | null,
+  githubAppPrivateKey?: string | null,
+  githubAppInstallationId?: string | null,
 ): Promise<void> {
   let resolvedPath = repoPath
 
@@ -985,17 +1241,29 @@ async function runFullIndex(
   }
 
   try {
+    // Always generate a fresh token — GitHub App installation tokens expire after 1 hour
+    const freshToken = await resolveCloneToken(githubAppId, githubAppPrivateKey, githubAppInstallationId, token)
     if (!existsSync(cloneDir)) {
-      const cloneUrl = buildAuthenticatedUrl(repoUrl!, token ?? null)
-      console.log(`[repos] Auto-cloning ${repoUrl} → ${cloneDir}`)
-      await execAsync(`git clone --depth=1 "${cloneUrl}" "${cloneDir}"`, { timeout: 300_000 })
+      const cloneUrl = buildAuthenticatedUrl(repoUrl!, freshToken)
+      // Clone the first indexed branch explicitly so the refspec tracks the right branch
+      const primaryBranch = indexBranches[0] ?? 'main'
+      console.log(`[repos] Auto-cloning ${repoUrl} (branch: ${primaryBranch}) → ${cloneDir}`)
+      await execAsync(`git clone --depth=1 -b "${primaryBranch}" "${cloneUrl}" "${cloneDir}"`, { timeout: 300_000 })
     } else {
-      // Pull latest — always refresh before indexing
+      // Pull latest — update remote URL with a fresh token before fetching
       console.log(`[repos] Pulling latest in ${cloneDir}`)
-      await execAsync(`git -C "${cloneDir}" fetch --depth=1 origin && git -C "${cloneDir}" reset --hard origin/HEAD`, { timeout: 120_000 })
+      if (freshToken && repoUrl) {
+        const freshUrl = buildAuthenticatedUrl(repoUrl, freshToken)
+        await execAsync(`git -C "${cloneDir}" remote set-url origin "${freshUrl}"`, { timeout: 10_000 })
+      }
+      // Fetch the specific branches being indexed rather than relying on stored refspecs
+      const branchArgs = indexBranches.map(b => `"${b}"`).join(' ')
+      await execAsync(`git -C "${cloneDir}" fetch --depth=1 origin ${branchArgs} && git -C "${cloneDir}" reset --hard origin/${indexBranches[0]}`, { timeout: 120_000 })
     }
   } catch (err) {
-    const errMsg = `Clone/pull failed: ${(err as Error).message.split('\n')[0]}`
+    const execErr = err as ExecException & { stderr?: string }
+    const detail = execErr.stderr?.trim() || execErr.message.split('\n').slice(1).join(' ').trim()
+    const errMsg = `Clone/pull failed: ${detail || execErr.message.split('\n')[0]}`
     console.error(`[repos] ${errMsg}`)
     for (const branch of indexBranches) setProgress(`${repoId}:${branch}`, { step: 'error', message: errMsg })
     return
@@ -1042,8 +1310,8 @@ async function runFullIndex(
   }
 }
 
-/** Build an authenticated clone URL by embedding the token as password */
-function buildAuthenticatedUrl(repoUrl: string, token: string | null): string {
+/** @deprecated — use buildAuthenticatedUrl from git-utils */
+function _buildAuthenticatedUrl_unused(repoUrl: string, token: string | null): string {
   if (!token) return repoUrl
   try {
     const url = new URL(repoUrl)

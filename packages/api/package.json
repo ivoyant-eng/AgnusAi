@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@agnus-ai/core": "workspace:*",
+    "@octokit/auth-app": "^7.0.0",
+    "@octokit/rest": "^20.0.2",
     "@casl/ability": "^6.7.3",
     "@agnus-ai/reviewer": "workspace:*",
     "@agnus-ai/shared": "workspace:*",
