@@ -1,6 +1,7 @@
 // GitHub VCS Adapter
 
 import { Octokit } from '@octokit/rest';
+import { createAppAuth } from '@octokit/auth-app';
 import { VCSAdapter } from './base';
 import {
   PullRequest,
@@ -21,9 +22,12 @@ import {
 import { AGNUSAI_MARKER } from '../../review/thread';
 
 interface GitHubConfig {
-  token: string;
+  token?: string;             // PAT — backward compat
   owner: string;
   repo: string;
+  appId?: string;             // GitHub App ID
+  privateKey?: string;        // PEM private key
+  installationId?: string;    // Installation ID
 }
 
 export class GitHubAdapter implements VCSAdapter {
@@ -33,7 +37,18 @@ export class GitHubAdapter implements VCSAdapter {
   private repo: string;
 
   constructor(config: GitHubConfig) {
-    this.octokit = new Octokit({ auth: config.token });
+    if (config.appId && config.privateKey && config.installationId) {
+      this.octokit = new Octokit({
+        authStrategy: createAppAuth,
+        auth: {
+          appId: config.appId,
+          privateKey: config.privateKey,
+          installationId: config.installationId,
+        },
+      });
+    } else {
+      this.octokit = new Octokit({ auth: config.token });
+    }
     this.owner = config.owner;
     this.repo = config.repo;
   }

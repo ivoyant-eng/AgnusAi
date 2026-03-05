@@ -79,6 +79,9 @@ export interface ReviewRunOptions {
   repoUrl: string
   prNumber: number
   token?: string
+  githubAppId?: string
+  githubAppPrivateKey?: string
+  githubAppInstallationId?: string
   baseBranch: string
   pool: Pool
   /** Azure only: if true, gates on iteration DB state and diffs only new commits since last reviewed iteration */
@@ -161,12 +164,15 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
   let vcs: any
   let azureAdapter: AzureDevOpsAdapter | undefined
   if (platform === 'github') {
-    if (!token) throw new Error('GitHub token required for review')
     // https://github.com/{owner}/{repo}
     const urlParts = repoUrl.replace(/\/$/, '').split('/')
     const owner = urlParts[urlParts.length - 2] ?? ''
     const repo = urlParts[urlParts.length - 1] ?? ''
-    vcs = new GitHubAdapter({ token, owner, repo })
+    const appRow = opts.githubAppId && opts.githubAppPrivateKey && opts.githubAppInstallationId
+      ? { appId: opts.githubAppId, privateKey: opts.githubAppPrivateKey, installationId: opts.githubAppInstallationId }
+      : null
+    if (!appRow && !token) throw new Error('GitHub token or App credentials required for review')
+    vcs = new GitHubAdapter({ token, owner, repo, ...appRow })
   } else {
     if (!token) throw new Error('Azure token required for review')
     // https://dev.azure.com/{org}/{project}/_git/{repo}
