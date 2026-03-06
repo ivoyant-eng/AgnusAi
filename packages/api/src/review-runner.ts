@@ -248,7 +248,7 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
       maxDiffSize: process.env.MAX_DIFF_SIZE ? parseInt(process.env.MAX_DIFF_SIZE) : 150000,
       focusAreas: [],
       ignorePaths: ['node_modules', 'dist', 'build', '.git'],
-      precisionThreshold: process.env.PRECISION_THRESHOLD ? parseFloat(process.env.PRECISION_THRESHOLD) : 0.7,
+      precisionThreshold: process.env.PRECISION_THRESHOLD ? parseFloat(process.env.PRECISION_THRESHOLD) : 0.75,
       multiAgentEnabled: (process.env.MULTI_AGENT_ENABLED ?? 'false').toLowerCase() === 'true',
       reviewMode: ((process.env.REVIEW_MODE ?? 'single').toLowerCase() as 'single' | 'fast' | 'thorough' | 'auto'),
       enabledAgents: parseEnabledAgents(process.env.ENABLED_AGENTS),

@@ -158,6 +158,8 @@ RULES:
 - You may use <details>/<summary> for collapsible sections. Inside <details> blocks, use only plain text and bullet lists — never triple-backtick code fences inside <details> as they break rendering on Azure DevOps and other platforms.
 - If the PR looks good output VERDICT: approve with no comments
 - NEVER comment on whether a specific package/library version number is valid, exists, or is outdated. Your training data has a knowledge cutoff and package versions change constantly — you will be wrong. Skip ALL observations about version numbers, semver ranges, or whether a version is "the latest". Focus only on code logic, patterns, and correctness.
+- NEVER write vague advisory comments like "ensure compatibility", "verify this works", "check the documentation", "test thoroughly", or "this may have breaking changes" — these are noise. Only comment if you can point to a specific line of code that will break and explain exactly why.
+- NEVER comment on lock files (pnpm-lock.yaml, package-lock.json, yarn.lock, go.sum, etc.) — they are auto-generated. If the only changed files are lock files and package.json version bumps, output VERDICT: approve with no comments.
 - NEVER mention "blast radius", "graph context", "codebase context", or any internal tooling concepts in your review comments. Use the codebase context section only to understand impact — your comments must read as if written by a human reviewer who knows the codebase.
 - UI Permission Attribution: When flagging a missing permission check on a UI element (button, action, menu item), reference the line where the disabled/enabled prop (e.g. \`buttonDisabled\`, \`disabled\`, \`isDisabled\`) is set in the render config — NOT the callback function it invokes. The callback is irrelevant to the authorization gap; the unconditional prop is the finding.
 - UI Permission Consistency: If context lines show sibling buttons or actions in the same list/array where some apply \`hasPermission()\`, \`can()\`, or similar guards on their disabled state and others do not, flag the ungated element. A hardcoded \`buttonDisabled: false\` next to a properly-gated sibling is an access control bug.`;
@@ -216,12 +218,38 @@ export function serializeGraphContext(ctx: GraphReviewContext): string {
   return lines.join('\n') + '\n';
 }
 
+/** Files that are auto-generated or carry no reviewable logic — excluded from LLM diff. */
+const SKIP_FILE_PATTERNS = [
+  /^pnpm-lock\.yaml$/,
+  /^package-lock\.json$/,
+  /^yarn\.lock$/,
+  /^bun\.lockb$/,
+  /^composer\.lock$/,
+  /^Gemfile\.lock$/,
+  /^Pipfile\.lock$/,
+  /^poetry\.lock$/,
+  /^go\.sum$/,
+  /^Cargo\.lock$/,
+  /\.tsbuildinfo$/,
+  /\.snap$/, // jest snapshots
+]
+
+export function shouldSkipFile(path: string): boolean {
+  const base = path.split('/').pop() ?? path
+  return SKIP_FILE_PATTERNS.some(p => p.test(base) || p.test(path))
+}
+
 export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { content: string; truncated: boolean; truncatedCount: number } {
   let content = '';
   let currentSize = 0;
+  const reviewableFiles = diff.files.filter(f => !shouldSkipFile(f.path));
+  const skippedCount = diff.files.length - reviewableFiles.length;
+  if (skippedCount > 0) {
+    content += `[${skippedCount} generated/lock file(s) excluded from review]\n`;
+  }
 
-  for (let i = 0; i < diff.files.length; i++) {
-    const file = diff.files[i];
+  for (let i = 0; i < reviewableFiles.length; i++) {
+    const file = reviewableFiles[i];
     const hunksWithHeaders = file.hunks
       .map(h => {
         // Annotate each + line with its explicit new-file line number.
@@ -247,7 +275,7 @@ export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { conten
     const fileDiff = `--- ${file.path}\n+++ ${file.path}\n${hunksWithHeaders}\n`;
 
     if (currentSize + fileDiff.length > maxChars) {
-      const truncatedCount = diff.files.length - i;
+      const truncatedCount = reviewableFiles.length - i;
       content += `\n... [Diff truncated — ${truncatedCount} more files]`;
       return { content, truncated: true, truncatedCount };
     }
