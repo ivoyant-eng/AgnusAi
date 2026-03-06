@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowRight, Save, Trash2, Copy, CheckCircle, RefreshCw, Plus, ChevronDown, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -26,6 +26,10 @@ interface VcsInstallation {
   account_type: string | null
   github_app_id: string | null
   github_app_installation_id: string | null
+  azure_client_id: string | null
+  azure_tenant_id: string | null
+  azure_org_url: string | null
+  azure_connected: boolean
   created_at: string
 }
 
@@ -47,10 +51,28 @@ function deleteCredential(id: string) {
 
 export default function Connect() {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { user } = useAuth()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [platform, setPlatform] = useState<'github' | 'azure'>('github')
+  const [oauthSuccess, setOauthSuccess] = useState<string | null>(null)
+
+  // Handle OAuth callback params (?azure_connected=installationId or ?azure_error=...)
+  useEffect(() => {
+    const connected = searchParams.get('azure_connected')
+    const oauthError = searchParams.get('azure_error')
+    if (connected) {
+      setOauthSuccess('Azure DevOps connected successfully!')
+      setPlatform('azure')
+      setSearchParams({})
+    } else if (oauthError) {
+      setError(`Azure OAuth failed: ${oauthError}`)
+      setPlatform('azure')
+      setSearchParams({})
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // ── Webhook config panel ──────────────────────────────────────────────────
   const activeOrgSlug = user?.orgs?.find((o: { orgId: string; slug: string }) => o.orgId === user.activeOrgId)?.slug
@@ -101,7 +123,7 @@ export default function Connect() {
   const installations = (installationsData?.installations ?? []).filter(i => i.platform === platform)
 
   const [showAddInstallation, setShowAddInstallation] = useState(false)
-  const [addForm, setAddForm] = useState({ appId: '', privateKey: '', installationId: '', displayName: '' })
+  const [addForm, setAddForm] = useState({ appId: '', privateKey: '', installationId: '', displayName: '', clientId: '', clientSecret: '', tenantId: '', orgUrl: '' })
   const [addSaving, setAddSaving] = useState(false)
   const [addError, setAddError] = useState('')
 
@@ -110,22 +132,20 @@ export default function Connect() {
     setAddSaving(true)
     setAddError('')
     try {
+      const body = platform === 'azure'
+        ? { platform, displayName: addForm.displayName || undefined, clientId: addForm.clientId, clientSecret: addForm.clientSecret, tenantId: addForm.tenantId, azureOrgUrl: addForm.orgUrl }
+        : { platform, displayName: addForm.displayName || undefined, appId: addForm.appId, privateKey: addForm.privateKey, installationId: addForm.installationId }
       const res = await fetch('/api/vcs-installations', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          platform,
-          displayName: addForm.displayName || undefined,
-          appId: addForm.appId,
-          privateKey: addForm.privateKey,
-          installationId: addForm.installationId,
-        }),
+        body: JSON.stringify(body),
       })
-      const data = await res.json() as { installation?: VcsInstallation; error?: string }
+      const data = await res.json() as { installation?: VcsInstallation; authUrl?: string; error?: string }
       if (!res.ok || data.error) throw new Error(data.error ?? 'Failed to save')
       await mutateInstallations()
       setShowAddInstallation(false)
-      setAddForm({ appId: '', privateKey: '', installationId: '', displayName: '' })
+      setAddForm({ appId: '', privateKey: '', installationId: '', displayName: '', clientId: '', clientSecret: '', tenantId: '', orgUrl: '' })
+      if (data.authUrl) window.open(data.authUrl, '_blank', 'noopener,noreferrer')
     } catch (err) {
       setAddError((err as Error).message)
     } finally {
@@ -136,6 +156,18 @@ export default function Connect() {
   async function handleRemoveInstallation(id: string) {
     await fetch(`/api/vcs-installations/${id}`, { method: 'DELETE', credentials: 'include' })
     mutateInstallations()
+  }
+
+  async function handleReauthorize(inst: VcsInstallation) {
+    const res = await fetch(`/api/vcs-installations/${inst.id}/reauth`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: '{}',
+    })
+    const data = await res.json() as { authUrl?: string; error?: string }
+    if (data.authUrl) {
+      window.open(data.authUrl, '_blank', 'noopener,noreferrer')
+    } else {
+      setError(data.error ?? 'Failed to get authorization URL')
+    }
   }
 
   // ── Per-installation repo picker state ───────────────────────────────────
@@ -310,6 +342,22 @@ export default function Connect() {
                 <p className="font-mono text-xs text-foreground">application/json</p>
               </div>
             )}
+            {platform === 'azure' && (
+              <div className="space-y-1.5">
+                <p className="label-meta">Entra App → Redirect URI</p>
+                <div className="flex items-stretch border border-border">
+                  <div className="flex-1 px-3 py-2 font-mono text-xs text-muted-foreground overflow-x-auto whitespace-nowrap bg-muted/20">
+                    {window.location.origin}/api/ado/oauth/callback
+                  </div>
+                  <button type="button"
+                    onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/api/ado/oauth/callback`) }}
+                    className="flex items-center gap-1.5 px-3 border-l border-border label-meta hover:bg-muted/30 transition-colors shrink-0">
+                    <Copy className="h-3 w-3" /> COPY
+                  </button>
+                </div>
+                <p className="label-meta">Register this as a <span className="font-mono text-foreground">Web</span> redirect URI in Azure Portal → App registrations → Authentication.</p>
+              </div>
+            )}
             <div className="space-y-1.5">
               <p className="label-meta">{platform === 'github' ? 'Secret' : 'X-Webhook-Secret header value'}</p>
               {revealedSecret ? (
@@ -352,6 +400,13 @@ export default function Connect() {
         </div>
 
         <div className="p-6 space-y-6">
+          {/* OAuth success / error banners */}
+          {oauthSuccess && (
+            <div className="border border-green-600 bg-green-50 px-3 py-2.5 flex items-center justify-between gap-3">
+              <p className="font-mono text-xs text-green-800">{oauthSuccess}</p>
+              <button type="button" onClick={() => setOauthSuccess(null)} className="label-meta hover:text-foreground shrink-0"><X className="h-3 w-3" /></button>
+            </div>
+          )}
           {/* Platform selector */}
           <div className="space-y-2">
             <Label htmlFor="platform">Platform</Label>
@@ -374,88 +429,124 @@ export default function Connect() {
             </div>
           </div>
 
-          {/* ── GitHub App installations ── */}
-          {platform === 'github' && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <Label>GitHub App Installations</Label>
-                <button type="button" onClick={() => setShowAddInstallation(v => !v)}
-                  className="flex items-center gap-1 label-meta hover:text-foreground transition-colors">
-                  <Plus className="h-3 w-3" />
-                  {showAddInstallation ? 'Cancel' : 'Add installation'}
+          {/* ── VCS Installation profiles (GitHub App / Azure PAT) ── */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label>{platform === 'github' ? 'GitHub App Installations' : 'Azure DevOps Connections'}</Label>
+              <button type="button" onClick={() => { setShowAddInstallation(v => !v); setAddError('') }}
+                className="flex items-center gap-1 label-meta hover:text-foreground transition-colors">
+                <Plus className="h-3 w-3" />
+                {showAddInstallation ? 'Cancel' : platform === 'github' ? 'Add installation' : 'Add connection'}
+              </button>
+            </div>
+
+            {/* Add installation form */}
+            {showAddInstallation && (
+              <form onSubmit={handleSaveInstallation} className="border border-border p-4 space-y-3 bg-muted/5">
+                {platform === 'github' ? (
+                  <>
+                    <p className="label-meta" style={{ color: 'var(--lp-accent)' }}>// new GitHub App installation</p>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="add-appId">App ID</Label>
+                      <Input id="add-appId" type="number" placeholder="123456"
+                        value={addForm.appId} onChange={e => setAddForm(f => ({ ...f, appId: e.target.value }))} required />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Private Key (.pem)</Label>
+                      <PemUpload value={addForm.privateKey} onChange={pem => setAddForm(f => ({ ...f, privateKey: pem }))} required />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="add-installId">Installation ID</Label>
+                      <Input id="add-installId" type="number" placeholder="78901234"
+                        value={addForm.installationId} onChange={e => setAddForm(f => ({ ...f, installationId: e.target.value }))} required />
+                      <p className="label-meta">
+                        Find it at <span className="font-mono text-foreground">github.com/settings/installations</span> — click your App, the URL ends with the ID.
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p className="label-meta" style={{ color: 'var(--lp-accent)' }}>// new Azure DevOps connection (Entra ID app)</p>
+                    <div className="border border-border bg-muted/5 px-3 py-2.5 space-y-0.5">
+                      <p className="label-meta">Redirect URI to register in your Entra app:</p>
+                      <p className="font-mono text-xs text-foreground break-all">{window.location.origin}/api/ado/oauth/callback</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="add-orgUrl">Organization URL</Label>
+                      <Input id="add-orgUrl" placeholder="https://dev.azure.com/myorg"
+                        value={addForm.orgUrl} onChange={e => setAddForm(f => ({ ...f, orgUrl: e.target.value }))} required />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="add-clientId">Application (Client) ID</Label>
+                      <Input id="add-clientId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                        value={addForm.clientId} onChange={e => setAddForm(f => ({ ...f, clientId: e.target.value }))} required />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="add-tenantId">Directory (Tenant) ID</Label>
+                      <Input id="add-tenantId" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                        value={addForm.tenantId} onChange={e => setAddForm(f => ({ ...f, tenantId: e.target.value }))} required />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="add-clientSecret">Client Secret</Label>
+                      <Input id="add-clientSecret" type="password" placeholder="Secret value (not the ID)"
+                        value={addForm.clientSecret} onChange={e => setAddForm(f => ({ ...f, clientSecret: e.target.value }))} required />
+                      <p className="label-meta">
+                        Azure Portal → App registrations → your app → Certificates &amp; secrets. Scope needed: <span className="font-mono text-foreground">user_impersonation</span> (Azure DevOps).
+                      </p>
+                    </div>
+                  </>
+                )}
+                <div className="space-y-1.5">
+                  <Label htmlFor="add-name">Label <span className="label-meta">(optional)</span></Label>
+                  <Input id="add-name" placeholder={platform === 'github' ? 'e.g. theashishmaurya personal' : 'e.g. ivoyant org'}
+                    value={addForm.displayName} onChange={e => setAddForm(f => ({ ...f, displayName: e.target.value }))} />
+                </div>
+                {addError && <p className="font-mono text-xs text-destructive border border-destructive px-3 py-2">{addError}</p>}
+                <Button type="submit" size="sm" disabled={addSaving}>
+                  {addSaving ? 'Validating…' : platform === 'github' ? 'Save Installation' : 'Save Connection'}
+                </Button>
+              </form>
+            )}
+
+            {/* Saved installation cards */}
+            {installations.length === 0 && !showAddInstallation && (
+              <div className="border border-dashed border-border px-4 py-5 text-center">
+                <p className="label-meta mb-2">
+                  {platform === 'github' ? 'No GitHub App installations configured.' : 'No Azure DevOps connections configured.'}
+                </p>
+                <button type="button" onClick={() => setShowAddInstallation(true)}
+                  className="font-mono text-xs text-foreground hover:text-[#E85A1A] transition-colors">
+                  {platform === 'github' ? '+ Set up a GitHub App →' : '+ Add Azure DevOps connection →'}
                 </button>
               </div>
+            )}
 
-              {/* Add installation form */}
-              {showAddInstallation && (
-                <form onSubmit={handleSaveInstallation} className="border border-border p-4 space-y-3 bg-muted/5">
-                  <p className="label-meta" style={{ color: 'var(--lp-accent)' }}>// new GitHub App installation</p>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="add-appId">App ID</Label>
-                    <Input id="add-appId" type="number" placeholder="123456"
-                      value={addForm.appId} onChange={e => setAddForm(f => ({ ...f, appId: e.target.value }))} required />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Private Key (.pem)</Label>
-                    <PemUpload value={addForm.privateKey} onChange={pem => setAddForm(f => ({ ...f, privateKey: pem }))} required />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="add-installId">Installation ID</Label>
-                    <Input id="add-installId" type="number" placeholder="78901234"
-                      value={addForm.installationId} onChange={e => setAddForm(f => ({ ...f, installationId: e.target.value }))} required />
-                    <p className="label-meta">
-                      Find it at <span className="font-mono text-foreground">github.com/settings/installations</span> — click your App, the URL ends with the ID.
-                    </p>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="add-name">Label <span className="label-meta">(optional)</span></Label>
-                    <Input id="add-name" placeholder="e.g. theashishmaurya personal"
-                      value={addForm.displayName} onChange={e => setAddForm(f => ({ ...f, displayName: e.target.value }))} />
-                  </div>
-                  {addError && <p className="font-mono text-xs text-destructive border border-destructive px-3 py-2">{addError}</p>}
-                  <Button type="submit" size="sm" disabled={addSaving}>
-                    {addSaving ? 'Validating…' : 'Save Installation'}
-                  </Button>
-                </form>
-              )}
+            {installations.map(inst => {
+              const ps = getPickerState(inst.id)
+              return (
+                <InstallationCard
+                  key={inst.id}
+                  inst={inst}
+                  ps={ps}
+                  pickerRef={(el) => { pickerRefs.current[inst.id] = el }}
+                  onFetch={() => fetchInstRepos(inst)}
+                  onPickerToggle={() => setInstPickerState(inst.id, { open: !ps.open, search: '' })}
+                  onSearch={(s) => setInstPickerState(inst.id, { search: s })}
+                  onSelect={(repo) => setInstPickerState(inst.id, { selected: repo, open: false, search: '' })}
+                  onRemove={() => handleRemoveInstallation(inst.id)}
+                  onConnect={(repo, branches) => connectViaInstallation(inst, repo, branches)}
+                  onReauthorize={() => handleReauthorize(inst)}
+                />
+              )
+            })}
 
-              {/* Saved installation cards */}
-              {installations.length === 0 && !showAddInstallation && (
-                <div className="border border-dashed border-border px-4 py-5 text-center">
-                  <p className="label-meta mb-2">No GitHub App installations configured.</p>
-                  <button type="button" onClick={() => setShowAddInstallation(true)}
-                    className="font-mono text-xs text-foreground hover:text-[#E85A1A] transition-colors">
-                    + Set up a GitHub App →
-                  </button>
-                </div>
-              )}
-
-              {installations.map(inst => {
-                const ps = getPickerState(inst.id)
-                return (
-                  <InstallationCard
-                    key={inst.id}
-                    inst={inst}
-                    ps={ps}
-                    pickerRef={(el) => { pickerRefs.current[inst.id] = el }}
-                    onFetch={() => fetchInstRepos(inst)}
-                    onPickerToggle={() => setInstPickerState(inst.id, { open: !ps.open, search: '' })}
-                    onSearch={(s) => setInstPickerState(inst.id, { search: s })}
-                    onSelect={(repo) => setInstPickerState(inst.id, { selected: repo, open: false, search: '' })}
-                    onRemove={() => handleRemoveInstallation(inst.id)}
-                    onConnect={(repo, branches) => connectViaInstallation(inst, repo, branches)}
-                  />
-                )
-              })}
-
-              {/* Divider to PAT fallback */}
-              <div className="flex items-center gap-3 pt-1">
-                <div className="flex-1 border-t border-border" />
-                <span className="label-meta">or use PAT instead</span>
-                <div className="flex-1 border-t border-border" />
-              </div>
+            {/* Divider to PAT fallback */}
+            <div className="flex items-center gap-3 pt-1">
+              <div className="flex-1 border-t border-border" />
+              <span className="label-meta">or use PAT directly</span>
+              <div className="flex-1 border-t border-border" />
             </div>
-          )}
+          </div>
 
           {/* ── PAT / Azure form ── */}
           <form onSubmit={handlePatSubmit} className="space-y-4">
@@ -555,13 +646,15 @@ interface InstallationCardProps {
   onSelect: (repo: AppRepo) => void
   onRemove: () => void
   onConnect: (repo: AppRepo, branches: string[]) => void
+  onReauthorize: () => void
 }
 
-function InstallationCard({ inst, ps, pickerRef, onFetch, onPickerToggle, onSearch, onSelect, onRemove, onConnect }: InstallationCardProps) {
+function InstallationCard({ inst, ps, pickerRef, onFetch, onPickerToggle, onSearch, onSelect, onRemove, onConnect, onReauthorize }: InstallationCardProps) {
   const [branchInput, setBranchInput] = useState('master')
 
-  const displayName = inst.display_name ?? inst.account_login ?? `App #${inst.github_app_id}`
+  const displayName = inst.display_name ?? inst.account_login ?? (inst.platform === 'azure' ? inst.azure_org_url ?? 'Azure DevOps' : `App #${inst.github_app_id}`)
   const accountLabel = inst.account_type ? `${inst.account_type}` : null
+  const azureConnected = inst.platform === 'azure' && inst.azure_connected
 
   // Auto-fetch repos on first render if none loaded yet
   useEffect(() => {
@@ -577,16 +670,38 @@ function InstallationCard({ inst, ps, pickerRef, onFetch, onPickerToggle, onSear
       <div className="flex items-start justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <CheckCircle className="h-3.5 w-3.5 text-[#E85A1A] shrink-0" />
+            <CheckCircle className={`h-3.5 w-3.5 shrink-0 ${inst.platform === 'azure' && !azureConnected ? 'text-muted-foreground' : 'text-[#E85A1A]'}`} />
             <span className="font-mono text-sm font-semibold text-foreground">{displayName}</span>
             {accountLabel && <span className="label-meta">{accountLabel}</span>}
+            {inst.platform === 'azure' && (
+              <span className={`font-mono text-xs px-1.5 py-0.5 border ${azureConnected ? 'border-green-600 text-green-700' : 'border-amber-500 text-amber-600'}`}>
+                {azureConnected ? 'connected' : 'auth required'}
+              </span>
+            )}
           </div>
-          <p className="label-meta mt-0.5 ml-5">App #{inst.github_app_id} · Installation {inst.github_app_installation_id}</p>
+          {inst.platform === 'azure'
+            ? <p className="label-meta mt-0.5 ml-5">{inst.azure_org_url} · App {inst.azure_client_id?.slice(0, 8)}…</p>
+            : <p className="label-meta mt-0.5 ml-5">App #{inst.github_app_id} · Installation {inst.github_app_installation_id}</p>
+          }
         </div>
         <button type="button" onClick={onRemove} className="label-meta hover:text-destructive transition-colors shrink-0">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>
+
+      {/* Azure OAuth authorize button (shown when not yet connected) */}
+      {inst.platform === 'azure' && !azureConnected && (
+        <div className="border border-amber-200 bg-amber-50 px-3 py-2.5 space-y-1.5">
+          <p className="font-mono text-xs text-amber-800">
+            OAuth authorization required. Click below and sign in with your Azure service bot account.
+          </p>
+          <button type="button"
+            className="font-mono text-xs text-foreground border border-foreground px-2.5 py-1 hover:bg-foreground hover:text-background transition-colors"
+            onClick={() => onReauthorize()}>
+            Authorize with Microsoft →
+          </button>
+        </div>
+      )}
 
       {/* Repo picker */}
       <div ref={pickerRef} className="relative">
@@ -616,7 +731,7 @@ function InstallationCard({ inst, ps, pickerRef, onFetch, onPickerToggle, onSear
               {ps.repos.length === 0 && !ps.loading && (
                 <div className="px-3 py-3 space-y-1">
                   <p className="label-meta">No repositories found.</p>
-                  {ps.meta?.repositorySelection === 'selected' && (
+                  {inst.platform === 'github' && ps.meta?.repositorySelection === 'selected' && (
                     <p className="font-mono text-xs text-muted-foreground">
                       Installation is set to <span className="text-foreground">selected repos only</span>.
                       Add repos at github.com/settings/installations.
