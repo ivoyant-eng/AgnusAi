@@ -12,6 +12,7 @@ import type { Pool } from 'pg'
 const SKILLS_PATH = path.join(require.resolve('@agnus-ai/reviewer'), '../../..', 'skills')
 import { getRepo } from './graph-cache'
 import { createEmbeddingAdapter } from './embedding-factory'
+import { getAzureOAuthToken } from './azure-oauth'
 import type { EnforcedRuleContext, GraphReviewContext } from '@agnus-ai/shared'
 import {
   DEFAULT_REPO_PR_DESCRIPTION_SETTINGS,
@@ -82,6 +83,8 @@ export interface ReviewRunOptions {
   githubAppId?: string
   githubAppPrivateKey?: string
   githubAppInstallationId?: string
+  /** VCS installation ID — used to fetch a fresh Azure OAuth token when token is absent */
+  vcsInstallationId?: string
   baseBranch: string
   pool: Pool
   /** Azure only: if true, gates on iteration DB state and diffs only new commits since last reviewed iteration */
@@ -174,7 +177,14 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     if (!appRow && !token) throw new Error('GitHub token or App credentials required for review')
     vcs = new GitHubAdapter({ token, owner, repo, ...appRow })
   } else {
-    if (!token) throw new Error('Azure token required for review')
+    // Resolve Azure token: prefer passed-in token (PAT), fall back to OAuth installation token
+    let azureToken = token
+    let azureAuthType: 'pat' | 'bearer' = 'pat'
+    if (!azureToken && opts.vcsInstallationId) {
+      azureToken = await getAzureOAuthToken(pool, opts.vcsInstallationId)
+      azureAuthType = 'bearer'
+    }
+    if (!azureToken) throw new Error('Azure token required for review')
     // https://dev.azure.com/{org}/{project}/_git/{repo}
     const url = new URL(repoUrl)
     const parts = url.pathname.split('/').filter(Boolean)
@@ -182,7 +192,7 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     const organization = parts[0] ?? ''
     const project = parts[1] ?? ''
     const repository = parts[parts.length - 1] ?? ''
-    azureAdapter = new AzureDevOpsAdapter({ organization, project, repository, token })
+    azureAdapter = new AzureDevOpsAdapter({ organization, project, repository, token: azureToken, authType: azureAuthType })
     vcs = azureAdapter
   }
 

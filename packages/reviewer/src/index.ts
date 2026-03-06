@@ -352,8 +352,8 @@ export class PRReviewAgent {
       return {
         summary: 'Only dependency version changes detected. No code logic was modified.',
         comments: [],
+        suggestions: [],
         verdict: 'approve',
-        filesReviewed: reviewableFiles.map(f => f.path),
       };
     }
 

@@ -246,6 +246,7 @@ async function dispatchPREvent(event: PREvent, pool: Pool): Promise<void> {
             githubAppId: repoCreds.githubAppId,
             githubAppPrivateKey: repoCreds.githubAppPrivateKey,
             githubAppInstallationId: repoCreds.githubAppInstallationId,
+            vcsInstallationId: repoCreds.vcsInstallationId,
             pool,
             incrementalDiff,
             incrementalReview,
@@ -285,9 +286,9 @@ function verifySharedWebhookSecret(secret: string, provided?: string): boolean {
   }
 }
 
-async function getRepoCreds(pool: Pool, repoId: string): Promise<{ token?: string; githubAppId?: string; githubAppPrivateKey?: string; githubAppInstallationId?: string }> {
-  const res = await pool.query<{ token: string | null; github_app_id: string | null; github_app_private_key: string | null; github_app_installation_id: string | null }>(
-    'SELECT token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1',
+async function getRepoCreds(pool: Pool, repoId: string): Promise<{ token?: string; githubAppId?: string; githubAppPrivateKey?: string; githubAppInstallationId?: string; vcsInstallationId?: string }> {
+  const res = await pool.query<{ token: string | null; github_app_id: string | null; github_app_private_key: string | null; github_app_installation_id: string | null; vcs_installation_id: string | null }>(
+    'SELECT token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1',
     [repoId],
   )
   const row = res.rows[0]
@@ -297,6 +298,7 @@ async function getRepoCreds(pool: Pool, repoId: string): Promise<{ token?: strin
     githubAppId: row.github_app_id ?? undefined,
     githubAppPrivateKey: row.github_app_private_key ?? undefined,
     githubAppInstallationId: row.github_app_installation_id ?? undefined,
+    vcsInstallationId: row.vcs_installation_id ?? undefined,
   }
 }
 
