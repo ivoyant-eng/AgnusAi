@@ -688,6 +688,11 @@ async function main() {
     ALTER TABLE repos ADD COLUMN IF NOT EXISTS vcs_installation_id UUID
       REFERENCES vcs_installations(id) ON DELETE SET NULL
   `)
+  // Azure Entra ID OAuth token storage
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_access_token TEXT`)
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_refresh_token TEXT`)
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_token_expires_at TIMESTAMPTZ`)
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_oauth_state TEXT`)
 
   app.log.info('Database schema migrated')
   await seedAdminUser(pool)
