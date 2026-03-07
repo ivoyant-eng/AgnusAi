@@ -13,6 +13,7 @@ import {
   type PREvent,
 } from '../pr-event'
 import { runAsk } from '../ask-runner'
+import { runCommand } from '../command-runner'
 
 const execAsync = promisify(exec)
 
@@ -98,10 +99,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const repoId = await resolveRepoId(repoUrl, orgSlug)
     if (!repoId) return reply.status(200).send({ ok: true })
 
-    // /ask command — intercept issue_comment before PR event normalization
+    // @ryv / /ask command — intercept issue_comment before PR event normalization
     if (event === 'issue_comment' && payload.action === 'created') {
-      const result = await handleAskCommand(payload, repoId, repoUrl, pool, 'github')
-      if (result) return reply.status(202).send({ status: 'ask accepted' })
+      const result = await handleRyvCommand(payload, repoId, repoUrl, pool, 'github')
+      if (result) return reply.status(202).send({ status: 'command accepted' })
     }
 
     const prEvent = await normalizeGithubEvent(event, payload, repoId, repoUrl, pool)
@@ -148,10 +149,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const repoId = await resolveRepoId(repoUrl)
     if (!repoId) return reply.status(200).send({ ok: true })
 
-    // /ask command — intercept issue_comment before PR event normalization
+    // @ryv / /ask command — intercept issue_comment before PR event normalization
     if (event === 'issue_comment' && payload.action === 'created') {
-      const result = await handleAskCommand(payload, repoId, repoUrl, pool, 'github')
-      if (result) return reply.status(202).send({ status: 'ask accepted' })
+      const result = await handleRyvCommand(payload, repoId, repoUrl, pool, 'github')
+      if (result) return reply.status(202).send({ status: 'command accepted' })
     }
 
     const prEvent = await normalizeGithubEvent(event, payload, repoId, repoUrl, pool)
@@ -177,40 +178,51 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   })
 }
 
-// ─── /ask command handler ─────────────────────────────────────────────────────
+// ─── @ryv / /ask command handler ─────────────────────────────────────────────
 
-const ASK_ENABLED = (process.env.ASK_ENABLED ?? 'true').toLowerCase() !== 'false'
+const RYV_BOT_NAME = process.env.RYV_BOT_NAME ?? 'ryv'
+const COMMANDS_ENABLED = (process.env.COMMANDS_ENABLED ?? 'true').toLowerCase() !== 'false'
 
-async function handleAskCommand(
+async function handleRyvCommand(
   payload: Record<string, unknown>,
   repoId: string,
   repoUrl: string,
   pool: Pool,
   platform: 'github' | 'azure',
 ): Promise<boolean> {
-  if (!ASK_ENABLED) return false
+  if (!COMMANDS_ENABLED) return false
 
   const body = (payload.comment as any)?.body?.trim() ?? ''
-  if (!body.startsWith('/ask ')) return false
+  const isRyvMention = body.includes(`@${RYV_BOT_NAME}`)
+  const isLegacyAsk  = body.startsWith('/ask ')
 
-  // Only respond to PR issue comments (not plain issue comments)
+  if (!isRyvMention && !isLegacyAsk) return false
+
+  // Only respond to PR issue comments (not plain issue comments on repos)
   const issue = payload.issue as any
   if (!issue?.pull_request) return false
 
-  const question = body.slice('/ask '.length).trim()
-  if (!question) return false
-
   const prNumber = issue.number as number
   const commentId = (payload.comment as any)?.id as number
-  const baseBranch = issue.pull_request?.base?.ref ?? 'main'
+  const baseBranch = (issue.pull_request as any)?.base?.ref ?? 'main'
 
   const repoCreds = await getRepoCreds(pool, repoId)
   const token = repoCreds.token
 
-  setImmediate(() =>
-    runAsk({ platform, repoId, repoUrl, prNumber, question, commentId, token, baseBranch, pool })
-      .catch(err => console.error('[ask-runner] Error:', (err as Error).message))
-  )
+  if (isLegacyAsk) {
+    // Backward-compatible: route /ask directly to ask handler, skip NLP
+    const question = body.slice('/ask '.length).trim()
+    if (!question) return false
+    setImmediate(() =>
+      runCommand({ platform, repoId, repoUrl, prNumber, commentId, token, baseBranch, rawBody: body, pool, forceCommand: 'ask' })
+        .catch(err => console.error('[command-runner] Error:', (err as Error).message))
+    )
+  } else {
+    setImmediate(() =>
+      runCommand({ platform, repoId, repoUrl, prNumber, commentId, token, baseBranch, rawBody: body, pool })
+        .catch(err => console.error('[command-runner] Error:', (err as Error).message))
+    )
+  }
   return true
 }
 
