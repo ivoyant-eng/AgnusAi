@@ -693,6 +693,7 @@ async function main() {
   await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_refresh_token TEXT`)
   await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_token_expires_at TIMESTAMPTZ`)
   await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_oauth_state TEXT`)
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_redirect_uri TEXT`)
 
   app.log.info('Database schema migrated')
   await seedAdminUser(pool)
