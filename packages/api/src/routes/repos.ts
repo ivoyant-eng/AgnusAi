@@ -437,7 +437,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     const indexBranches = (branches && branches.length > 0) ? branches : ['main']
 
     // Derive a stable repoId from the URL
-    const repoId = Buffer.from(`${orgId}:${repoUrl}`).toString('base64url').slice(0, 32)
+    const repoId = Buffer.from(repoUrl).toString('base64url').slice(0, 32)
 
     // If connecting via a saved VCS installation, pull credentials from it
     let githubAppId = rawGithubAppId
@@ -511,7 +511,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     // Trigger full index in background
     setImmediate(() => {
       runFullIndex(pool, repoId, repoPath ?? null, indexBranches, repoUrl, token,
-        githubAppId, githubAppPrivateKey, githubAppInstallationId)
+        githubAppId, githubAppPrivateKey, githubAppInstallationId, vcsInstallationId)
     })
 
     return reply.status(202).send({
@@ -530,8 +530,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     const { rows } = await pool.query(
       isSystemAdmin(req) && !orgId
-        ? 'SELECT repo_url, repo_path, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1'
-        : 'SELECT repo_url, repo_path, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1 AND org_id = $2',
+        ? 'SELECT repo_url, repo_path, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1'
+        : 'SELECT repo_url, repo_path, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1 AND org_id = $2',
       isSystemAdmin(req) && !orgId ? [repoId] : [repoId, orgId],
     )
     if (rows.length === 0) {
@@ -554,7 +554,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     setImmediate(() => {
       const r = rows[0] as any
-      runFullIndex(pool, repoId, r.repo_path, branches, r.repo_url, r.token, r.github_app_id, r.github_app_private_key, r.github_app_installation_id)
+      runFullIndex(pool, repoId, r.repo_path, branches, r.repo_url, r.token, r.github_app_id, r.github_app_private_key, r.github_app_installation_id, r.vcs_installation_id)
     })
 
     return reply.status(202).send({
@@ -695,7 +695,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/vcs-installations', { preHandler: [requireAuth] }, async (req, reply) => {
     const orgId = activeOrg(req)
     if (!orgId) return reply.status(403).send({ error: 'No active org' })
-    const { platform, displayName, appId, privateKey, installationId, clientId, clientSecret, tenantId, azureOrgUrl } = req.body as {
+    const { platform, displayName, appId, privateKey, installationId, clientId, clientSecret, tenantId, azureOrgUrl, redirectUri } = req.body as {
       platform: string
       displayName?: string
       // GitHub App
@@ -707,6 +707,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
       clientSecret?: string
       tenantId?: string
       azureOrgUrl?: string
+      redirectUri?: string
     }
     if (!platform) return reply.status(400).send({ error: 'platform is required' })
 
@@ -742,26 +743,28 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     // Generate OAuth state for Azure (used in callback to find this installation)
     const oauthState = platform === 'azure' ? crypto.randomUUID() : null
 
+    const callbackUri = platform === 'azure'
+      ? (redirectUri ?? `${process.env.PUBLIC_URL ?? `${req.protocol}://${req.hostname}`}/api/ado/oauth/callback`)
+      : null
+
     const { rows } = await pool.query(
       `INSERT INTO vcs_installations
          (org_id, platform, display_name, account_login, account_type,
           github_app_id, github_app_private_key, github_app_installation_id,
-          azure_client_id, azure_client_secret, azure_tenant_id, azure_org_url, azure_oauth_state)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          azure_client_id, azure_client_secret, azure_tenant_id, azure_org_url, azure_oauth_state, azure_redirect_uri)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING id, platform, display_name, account_login, account_type,
                  github_app_id, github_app_installation_id,
                  azure_client_id, azure_tenant_id, azure_org_url, created_at`,
       [orgId, platform, displayName ?? accountLogin ?? null,
        accountLogin, accountType,
        appId ?? null, privateKey ?? null, installationId ?? null,
-       clientId ?? null, clientSecret ?? null, tenantId ?? null, azureOrgUrl ?? null, oauthState],
+       clientId ?? null, clientSecret ?? null, tenantId ?? null, azureOrgUrl ?? null, oauthState, callbackUri],
     )
     const installation = rows[0]
 
-    if (platform === 'azure' && oauthState && clientId && tenantId) {
-      const publicUrl = process.env.PUBLIC_URL ?? `${req.protocol}://${req.hostname}`
-      const redirectUri = `${publicUrl}/api/ado/oauth/callback`
-      authUrl = buildAzureAuthUrl({ clientId, tenantId, redirectUri, state: oauthState })
+    if (platform === 'azure' && oauthState && clientId && tenantId && callbackUri) {
+      authUrl = buildAzureAuthUrl({ clientId, tenantId, redirectUri: callbackUri, state: oauthState })
     }
 
     return reply.status(201).send({ installation, authUrl })
@@ -777,7 +780,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     }
 
     const { rows } = await pool.query(
-      `SELECT id, azure_client_id, azure_client_secret, azure_tenant_id
+      `SELECT id, azure_client_id, azure_client_secret, azure_tenant_id, azure_redirect_uri
        FROM vcs_installations WHERE azure_oauth_state = $1`,
       [state],
     )
@@ -785,8 +788,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     const inst = rows[0]
 
     try {
-      const publicUrl = process.env.PUBLIC_URL ?? `${req.protocol}://${req.hostname}`
-      const redirectUri = `${publicUrl}/api/ado/oauth/callback`
+      const redirectUri = inst.azure_redirect_uri
+        ?? `${process.env.PUBLIC_URL ?? `${req.protocol}://${req.hostname}`}/api/ado/oauth/callback`
       const tokens = await exchangeAzureCode({
         code, clientId: inst.azure_client_id, clientSecret: inst.azure_client_secret,
         tenantId: inst.azure_tenant_id, redirectUri,
@@ -829,11 +832,14 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     if (!rows[0]) return reply.status(404).send({ error: 'Installation not found' })
     const inst = rows[0]
     if (inst.platform !== 'azure') return reply.status(400).send({ error: 'Re-auth only applies to Azure installations' })
-    // Regenerate state
+    const { redirectUri: clientRedirectUri } = req.body as { redirectUri?: string }
     const newState = crypto.randomUUID()
-    await pool.query(`UPDATE vcs_installations SET azure_oauth_state = $1 WHERE id = $2`, [newState, id])
-    const publicUrl = process.env.PUBLIC_URL ?? `${req.protocol}://${req.hostname}`
-    const redirectUri = `${publicUrl}/api/ado/oauth/callback`
+    const redirectUri = clientRedirectUri
+      ?? `${process.env.PUBLIC_URL ?? `${req.protocol}://${req.hostname}`}/api/ado/oauth/callback`
+    await pool.query(
+      `UPDATE vcs_installations SET azure_oauth_state = $1, azure_redirect_uri = $2 WHERE id = $3`,
+      [newState, redirectUri, id],
+    )
     const authUrl = buildAzureAuthUrl({ clientId: inst.azure_client_id, tenantId: inst.azure_tenant_id, redirectUri, state: newState })
     return reply.send({ authUrl })
   })
@@ -1354,6 +1360,7 @@ async function runFullIndex(
   githubAppId?: string | null,
   githubAppPrivateKey?: string | null,
   githubAppInstallationId?: string | null,
+  vcsInstallationId?: string | null,
 ): Promise<void> {
   let resolvedPath = repoPath
 
@@ -1376,7 +1383,17 @@ async function runFullIndex(
 
   try {
     // Always generate a fresh token — GitHub App installation tokens expire after 1 hour
-    const freshToken = await resolveCloneToken(githubAppId, githubAppPrivateKey, githubAppInstallationId, token)
+    // For Azure OAuth installations, fetch a fresh Bearer token via the stored installation
+    let cloneToken = token
+    if (!cloneToken && !githubAppId && vcsInstallationId) {
+      try {
+        const { getAzureOAuthToken } = await import('../azure-oauth')
+        cloneToken = await getAzureOAuthToken(pool, vcsInstallationId)
+      } catch (err) {
+        console.error('[repos] Failed to get Azure OAuth token for clone:', (err as Error).message)
+      }
+    }
+    const freshToken = await resolveCloneToken(githubAppId, githubAppPrivateKey, githubAppInstallationId, cloneToken)
     if (!existsSync(cloneDir)) {
       const cloneUrl = buildAuthenticatedUrl(repoUrl!, freshToken)
       // Clone the first indexed branch explicitly so the refspec tracks the right branch
@@ -1390,9 +1407,10 @@ async function runFullIndex(
         const freshUrl = buildAuthenticatedUrl(repoUrl, freshToken)
         await execAsync(`git -C "${cloneDir}" remote set-url origin "${freshUrl}"`, { timeout: 10_000 })
       }
-      // Fetch the specific branches being indexed rather than relying on stored refspecs
-      const branchArgs = indexBranches.map(b => `"${b}"`).join(' ')
-      await execAsync(`git -C "${cloneDir}" fetch --depth=1 origin ${branchArgs} && git -C "${cloneDir}" reset --hard origin/${indexBranches[0]}`, { timeout: 120_000 })
+      // Fetch the primary branch and reset to FETCH_HEAD.
+      // Note: shallow fetches don't create refs/remotes/origin/BRANCH, only FETCH_HEAD.
+      const primaryBranch = indexBranches[0]
+      await execAsync(`git -C "${cloneDir}" fetch --depth=1 origin "${primaryBranch}" && git -C "${cloneDir}" reset --hard FETCH_HEAD`, { timeout: 120_000 })
     }
   } catch (err) {
     const execErr = err as ExecException & { stderr?: string }
@@ -1444,24 +1462,6 @@ async function runFullIndex(
   }
 }
 
-/** @deprecated — use buildAuthenticatedUrl from git-utils */
-function _buildAuthenticatedUrl_unused(repoUrl: string, token: string | null): string {
-  if (!token) return repoUrl
-  try {
-    const url = new URL(repoUrl)
-    if (repoUrl.includes('dev.azure.com')) {
-      url.username = 'oauth2'
-      url.password = token
-    } else {
-      // GitHub / GitLab / others
-      url.username = token
-      url.password = 'x-oauth-basic'
-    }
-    return url.toString()
-  } catch {
-    return repoUrl
-  }
-}
 
 // ----- Simple in-process progress store -----
 // Key format: `${repoId}:${branch}`
