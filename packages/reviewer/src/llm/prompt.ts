@@ -374,7 +374,7 @@ ${diffResult.content}
 ## Review Signal (for context)
 Summary: ${review.summary}
 Verdict: ${review.verdict}
-Comment Count: ${review.comments.length}
+Comment Count: ${review.comments.length}${review.prScore !== undefined ? `\nPR Quality Score: ${review.prScore}/100` : ''}
 
 ## Task
 Generate:

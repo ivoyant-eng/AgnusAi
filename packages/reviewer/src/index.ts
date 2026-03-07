@@ -63,6 +63,22 @@ import { loadBestPractices } from './review/best-practices-loader';
 import { shouldSkipFile } from './llm/prompt';
 
 /**
+ * Aggregate PR quality score 0–100.
+ * 100 = clean PR with no findings; lower = more or higher-severity issues found.
+ * Penalty = confidence × severityWeight per comment; normalised so 20 penalty points → score of 0.
+ */
+export function computePRScore(comments: ReviewComment[]): number {
+  if (comments.length === 0) return 100;
+  const weights: Record<string, number> = { error: 3, warning: 2, info: 1 };
+  const totalPenalty = comments.reduce((sum, c) => {
+    const confidence = c.confidence ?? 0.7;
+    const weight = weights[c.severity ?? 'info'] ?? 1;
+    return sum + confidence * weight;
+  }, 0);
+  return Math.max(0, Math.min(100, Math.round(100 - totalPenalty * 5)));
+}
+
+/**
  * Result of an incremental review check
  */
 export interface IncrementalCheckResult {
@@ -271,6 +287,9 @@ export class PRReviewAgent {
     }
     result.comments = kept.length > 0 ? kept : result.comments.filter(c => c.confidence === undefined);
 
+    // Attach aggregate PR quality score
+    result.prScore = computePRScore(result.comments);
+
     // Add checkpoint marker to summary
     result.summary = `[Incremental Review: ${incrementalResult.diff.files.length} new files]\n\n${result.summary}`;
 
@@ -432,6 +451,9 @@ export class PRReviewAgent {
       console.log(`🎯 Precision filter: ${kept.length}/${result.comments.length} comments kept (threshold ${threshold})`);
     }
     result.comments = kept.length > 0 ? kept : result.comments.filter(c => c.confidence === undefined);
+
+    // Attach aggregate PR quality score
+    result.prScore = computePRScore(result.comments);
 
     // Cache diff for use in postReview path validation
     this.lastDiff = diff;
@@ -606,12 +628,21 @@ export class PRReviewAgent {
       bodyToPublish = `${pr.description.trim()}\n\n---\n\n## AgnusAI Description\n\n${description.body}`;
     }
 
+    // Append PR quality score label
+    const score = result.prScore;
+    const scoreLabel = score !== undefined
+      ? `quality: ${score}/100${score < 60 ? ' ⚠️' : ''}`
+      : null;
+    const labelsWithScore = publishLabels
+      ? [...description.labels, ...(scoreLabel ? [scoreLabel] : [])]
+      : [];
+
     await this.vcs.updatePRDescription!(prId, {
       ...description,
       body: bodyToPublish,
-      labels: publishLabels ? description.labels : []
+      labels: labelsWithScore,
     });
-    console.log(`📝 Updated PR title/body and labels (${publishLabels ? description.labels.length : 0} labels).`);
+    console.log(`📝 Updated PR title/body and labels (${labelsWithScore.length} labels, score=${score ?? 'n/a'}).`);
   }
 
   /**

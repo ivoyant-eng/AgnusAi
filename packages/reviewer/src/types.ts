@@ -153,6 +153,8 @@ export interface ReviewResult {
   tokensUsed?: number;
   /** PR splitting recommendation, populated when SPLIT_DETECTION_ENABLED and heuristics fire */
   splitSuggestion?: SplitSuggestion;
+  /** Aggregate PR quality score 0–100. 100 = no issues, lower = more/higher-severity findings. */
+  prScore?: number;
 }
 
 export type PRChangeType = 'bug' | 'feature' | 'refactor' | 'docs' | 'tests' | 'chore';
