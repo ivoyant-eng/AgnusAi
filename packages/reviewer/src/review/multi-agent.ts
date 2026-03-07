@@ -14,6 +14,18 @@ import { runSelfReflection } from './self-reflection';
 
 const DEFAULT_AGENT_CONCURRENCY = 2;
 
+// Per-agent sampling temperatures.
+// Security and compliance stay near-deterministic (false positives are costly).
+// Style gets more variance — creative suggestions are fine there.
+const AGENT_TEMPERATURE: Record<AgentRole, number> = {
+  security:              0.1,
+  correctness:           0.2,
+  performance:           0.2,
+  style_maintainability: 0.4,
+  ticket_compliance:     0.1,
+  blast_radius:          0.2,
+};
+
 const AGENT_DIRECTIVES: Record<AgentRole, string> = {
   security: `Focus only on exploitable vulnerabilities, authn/authz gaps, unsafe data handling, and secrets exposure. Ignore style/perf unless it creates a concrete security risk.
 
@@ -456,14 +468,15 @@ async function runSingleAgent(
 ): Promise<AgentOutput> {
   const started = Date.now();
   try {
-    // Agents run at temperature=0 for deterministic, reproducible findings.
-    // Variance comes from prompt content, not LLM sampling noise.
     const result = await llm.generateReview({
       ...context,
       agentRole: role,
       agentDirective: AGENT_DIRECTIVES[role],
-    }, 0);
-    const comments = result.comments.map(c => ({ ...c, sourceAgent: role }));
+    }, AGENT_TEMPERATURE[role]);
+    // Dedup within this agent's output before sending to the Judge.
+    // Prevents a single agent from producing 3 near-identical variants of the same finding.
+    const rawComments = result.comments.map(c => ({ ...c, sourceAgent: role }));
+    const comments = themeDedupeComments(rawComments);
     const output: ReviewResult = { ...result, comments };
     const telemetry: AgentTelemetry = {
       role,
