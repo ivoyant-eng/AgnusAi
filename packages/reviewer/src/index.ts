@@ -60,6 +60,7 @@ import { filterByConfidence } from './review/precision-filter';
 import { runReviewWithSpecialists } from './review/multi-agent';
 import { validateSuggestions, type ParseFn } from './review/suggestion-validator';
 import { runSelfReflection } from './review/self-reflection';
+import { consolidateFindings } from './review/consolidate';
 import { detectSplit, formatSplitSuggestion } from './review/split-detector';
 import { loadBestPractices } from './review/best-practices-loader';
 import { shouldSkipFile, serializeMermaidGraph } from './llm/prompt';
@@ -290,6 +291,9 @@ export class PRReviewAgent {
     }
     result.comments = kept.length > 0 ? kept : result.comments.filter(c => c.confidence === undefined);
 
+    // Deterministic consolidation — region dedup + severity budget
+    result.comments = consolidateFindings(result.comments);
+
     // Attach aggregate PR quality score
     result.prScore = computePRScore(result.comments);
 
@@ -457,6 +461,9 @@ export class PRReviewAgent {
       console.log(`🎯 Precision filter: ${kept.length}/${result.comments.length} comments kept (threshold ${threshold})`);
     }
     result.comments = kept.length > 0 ? kept : result.comments.filter(c => c.confidence === undefined);
+
+    // 7. Deterministic consolidation — region dedup + severity budget
+    result.comments = consolidateFindings(result.comments);
 
     // Attach aggregate PR quality score
     result.prScore = computePRScore(result.comments);
