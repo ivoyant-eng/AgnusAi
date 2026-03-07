@@ -1,9 +1,9 @@
-# GitHub App Auth
+# GitHub — App Installation
 
-By default Ryv uses a **Personal Access Token (PAT)** to post review comments. That works fine for individual use, but for team deployments a **GitHub App** is the recommended approach:
+By default Ryv uses a **Personal Access Token (PAT)** to post review comments. That works fine for personal use, but for team deployments a **GitHub App** is the recommended approach:
 
 - Reviews post as a named bot identity (e.g. `ryv-bot[bot]`) instead of a personal account
-- No expiry — App auth uses short-lived installation tokens refreshed automatically
+- No token expiry — App auth uses short-lived installation tokens refreshed automatically
 - Fine-grained permissions per repo, not account-wide
 - Approved by GitHub for org-level integrations
 
@@ -13,7 +13,7 @@ Existing PAT-based repos continue to work unchanged. Switching to App auth is op
 
 ---
 
-## 1. Create the GitHub App
+## Step 1 — Create the GitHub App
 
 Go to your GitHub organization or personal settings and create a new App.
 
@@ -26,8 +26,8 @@ Fill in these values:
 |-------|-------|
 | App name | `Ryv` (or any name you like) |
 | Homepage URL | Your Ryv instance URL, e.g. `https://ryv.example.com` |
-| Webhook URL | `https://ryv.example.com/api/webhooks/github/YOUR_ORG_SLUG` |
-| Webhook secret | The value from **Settings → Webhook Secrets → GitHub** in the dashboard |
+| Webhook URL | Shown in the **Connect page → webhook config panel** — copy from there |
+| Webhook secret | The value from the **Connect page → Generate secret** button |
 
 ### Required permissions
 
@@ -39,104 +39,98 @@ Fill in these values:
 | Checks | Read-only |
 | Metadata | Read-only (mandatory) |
 
-### Subscribe to events
+### Events to subscribe
 
-Check **Pull request** under _Subscribe to events_.
+Check **Pull request** and **Push** under _Subscribe to events_.
 
-Hit **Create GitHub App**.
-
----
-
-## 2. Generate a private key
-
-On the App's settings page, scroll down to **Private keys** → **Generate a private key**.
-
-A `.pem` file downloads to your machine — keep it safe, you'll paste its contents into Ryv in the next step.
-
-Also note the **App ID** shown at the top of the App settings page (a plain integer, e.g. `1234567`).
+Click **Create GitHub App**.
 
 ---
 
-## 3. Install the App on your repository
+## Step 2 — Generate a private key
+
+On the App's settings page, scroll to **Private keys** → **Generate a private key**.
+
+A `.pem` file downloads — keep it safe, you'll paste it into Ryv next.
+
+Also note the **App ID** shown at the top of the page (an integer, e.g. `1234567`).
+
+---
+
+## Step 3 — Install the App on your repository
 
 On the App settings page, click **Install App** in the left sidebar.
 
 - Choose your account or organization
-- Select **Only select repositories** and add the repo you want Ryv to review
+- Select **Only select repositories** and add the repos you want Ryv to review
 - Click **Install**
 
-The URL after installation looks like:
+The URL after installation ends with your **Installation ID**:
 
 ```
 https://github.com/settings/installations/78901234
-```
-
-That number (`78901234`) is your **Installation ID**.
-
----
-
-## 4. Connect in Ryv
-
-### Via the dashboard
-
-1. Go to **Connect a Repository**
-2. Set **Platform** to `GitHub`
-3. Click the **GitHub App** toggle (next to "Personal Access Token")
-4. Enter:
-   - **App ID** — the integer from the App settings page
-   - **Private Key** — paste the full `.pem` file contents
-   - **Installation ID** — from the installation URL
-5. Fill in the repo URL and branches, then submit
-
-### Via the API
-
-If the repo is already registered, you can add App credentials without re-registering:
-
-```bash
-curl -b /tmp/agnus.txt -X POST https://your-server.com/api/repos/<repoId>/github-app \
-  -H "Content-Type: application/json" \
-  -d '{
-    "appId": "1234567",
-    "privateKey": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----",
-    "installationId": "78901234"
-  }'
-```
-
-Returns `{ "ok": true, "repoId": "...", "githubAppId": "...", "githubAppInstallationId": "..." }`.
-
-When registering a new repo with App credentials from the start:
-
-```bash
-curl -b /tmp/agnus.txt -X POST https://your-server.com/api/repos \
-  -H "Content-Type: application/json" \
-  -d '{
-    "repoUrl": "https://github.com/owner/repo",
-    "platform": "github",
-    "branches": ["main"],
-    "githubAppId": "1234567",
-    "githubAppPrivateKey": "-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----",
-    "githubAppInstallationId": "78901234"
-  }'
+                                           ^^^^^^^^
+                                      Installation ID
 ```
 
 ---
 
-## 5. Verify
+## Step 4 — Add the installation in Ryv
 
-Open a pull request on the connected repo. Review comments will now appear from your GitHub App bot identity (e.g. `ryv-bot[bot]`) rather than a personal account.
+1. Open **Dashboard → Connect a Repository**
+2. Select **Platform: GitHub**
+3. In the **GitHub App Installation** accordion, click **+ Add**
+4. Fill in:
+   - **App ID** — the integer from Step 2
+   - **Private Key** — drag-and-drop or paste the `.pem` file contents
+   - **Installation ID** — from the installation URL in Step 3
+   - **Label** _(optional)_ — e.g. `ivoyant org` or `personal`
+5. Click **Save Installation**
 
-::: tip Find your org slug
-Your org slug appears in the dashboard URL and in **Settings → Organization**. For single-tenant installs it is `default`, giving a webhook URL of `.../api/webhooks/github/default`. The **Ready** page in the dashboard pre-fills the correct URL for your org automatically.
+The new installation card appears with a searchable repo dropdown.
+
+---
+
+## Step 5 — Connect a repository
+
+In the installation card:
+
+1. Click **Select a repository…** and search for the repo
+2. Enter the **branch** to index (e.g. `main`, `develop`)
+3. Click **Connect →**
+
+Ryv starts indexing immediately. You'll be redirected to the indexing progress page.
+
+---
+
+## Step 6 — Verify
+
+Open a pull request on the connected repo. Review comments will appear from your GitHub App bot identity (e.g. `ryv-bot[bot]`) instead of a personal account.
+
+---
+
+## PAT fallback
+
+If you prefer a quick setup without creating a GitHub App, use the **Personal Access Token** accordion on the Connect page.
+
+| Field | Value |
+|-------|-------|
+| Repository URL | `https://github.com/owner/repo` |
+| Access Token | A classic PAT with `repo` scope, or a fine-grained token with Contents + Pull requests read/write |
+| Branches | Comma-separated, e.g. `main, develop` |
+
+::: warning PAT limitations
+Reviews post as your personal GitHub account. Classic PATs have account-wide access. For team use, prefer the GitHub App method above.
 :::
 
 ---
 
-## PAT vs GitHub App — quick comparison
+## PAT vs GitHub App — comparison
 
 | | PAT | GitHub App |
 |-|-----|------------|
 | Comments posted as | Your personal account | `your-app[bot]` |
-| Token expiry | Never (classic) or configurable | Auto-refreshed, no action needed |
+| Token expiry | Never (classic) or configurable | Auto-refreshed every hour |
 | Permissions | Account-wide | Per-installation, per-repo |
 | Org approval required | No | Recommended for org deployments |
 | Revocation | Delete the token | Uninstall the App |
@@ -146,17 +140,16 @@ Your org slug appears in the dashboard URL and in **Settings → Organization**.
 ## Troubleshooting
 
 **`GitHub token or App credentials required for review`**
-The repo has neither a PAT nor complete App credentials (App ID + private key + installation ID). Add them via the dashboard or `POST /api/repos/:id/github-app`.
+The repo has neither a PAT nor complete App credentials. Re-add credentials via the dashboard installation card.
 
 **`signature verification failed` on webhook**
-The webhook secret in GitHub App settings doesn't match the secret stored in Ryv. Rotate the secret via **Settings → Webhook Secrets → Rotate** and update it in the GitHub App settings. Also double-check the webhook URL includes the org slug: `.../api/webhooks/github/YOUR_ORG_SLUG`.
+The webhook secret in GitHub App settings doesn't match the secret in Ryv. Click **Rotate & reveal** on the Connect page and update the value in your GitHub App settings.
 
 **`Bad credentials` from Octokit**
-Check that the private key is the complete `.pem` including the `-----BEGIN/END-----` lines. Multi-line keys must have `\n` newlines preserved — pasting into the dashboard textarea handles this automatically.
+The private key may be malformed. Make sure the full `.pem` content including `-----BEGIN RSA PRIVATE KEY-----` and `-----END RSA PRIVATE KEY-----` lines is included. Use the PEM file drag-and-drop upload to avoid copy-paste issues.
 
 **Reviews still posting as my personal account**
-The repo's `github_app_id` column may not be set. Check with:
-```bash
-GET /api/repos   # returns githubAppId and githubAppInstallationId per repo
-```
-If null, re-submit credentials via `POST /api/repos/:id/github-app`.
+The installation card was not saved correctly, or the repo was connected before the installation existed. Delete and re-connect the repo from the installation card.
+
+**App installed but no repos appear in the dropdown**
+Installation is set to **selected repositories** but none were added. Go to `github.com/settings/installations` → click your App → add repos. Then click **Refresh list** in the Ryv card.

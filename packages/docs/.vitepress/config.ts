@@ -30,7 +30,14 @@ export default defineConfig({
           { text: 'Hosted Service Setup', link: '/guide/hosted-setup' },
           { text: 'Docker Compose', link: '/guide/docker' },
           { text: 'Environment Variables', link: '/guide/env-vars' },
-          { text: 'GitHub App Auth', link: '/guide/github-app' },
+        ],
+      },
+      {
+        text: 'Connecting Repositories',
+        items: [
+          { text: 'Overview', link: '/guide/connect-overview' },
+          { text: 'GitHub — App Installation', link: '/guide/github-app' },
+          { text: 'Azure DevOps — Entra ID & PAT', link: '/guide/azure-devops' },
         ],
       },
       {
