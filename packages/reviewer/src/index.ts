@@ -36,7 +36,7 @@ export * from './types';
 export { filterByConfidence, DEFAULT_PRECISION_CONFIG } from './review/precision-filter';
 export type { PrecisionFilterConfig, FilteredByConfidence } from './review/precision-filter';
 export { runReviewWithSpecialists } from './review/multi-agent';
-export { buildReviewPrompt, buildAskPrompt, buildPRDescriptionPrompt, serializeGraphContext } from './llm/prompt';
+export { buildReviewPrompt, buildAskPrompt, buildPRDescriptionPrompt, serializeGraphContext, serializeMermaidGraph } from './llm/prompt';
 export { validateSuggestions } from './review/suggestion-validator';
 export { runSelfReflection } from './review/self-reflection';
 export { detectSplit } from './review/split-detector';
@@ -60,7 +60,7 @@ import { validateSuggestions, type ParseFn } from './review/suggestion-validator
 import { runSelfReflection } from './review/self-reflection';
 import { detectSplit, formatSplitSuggestion } from './review/split-detector';
 import { loadBestPractices } from './review/best-practices-loader';
-import { shouldSkipFile } from './llm/prompt';
+import { shouldSkipFile, serializeMermaidGraph } from './llm/prompt';
 
 /**
  * Aggregate PR quality score 0–100.
@@ -120,6 +120,7 @@ export class PRReviewAgent {
   private skills: SkillLoader;
   private config: Config;
   private lastDiff: Diff | null = null;
+  private lastGraphContext: GraphReviewContext | null = null;
   private checkpointHandled: boolean = false;
 
   constructor(config: Config) {
@@ -290,6 +291,9 @@ export class PRReviewAgent {
     // Attach aggregate PR quality score
     result.prScore = computePRScore(result.comments);
 
+    // Cache graph context for PR description generation
+    this.lastGraphContext = graphContext ?? null;
+
     // Add checkpoint marker to summary
     result.summary = `[Incremental Review: ${incrementalResult.diff.files.length} new files]\n\n${result.summary}`;
 
@@ -455,8 +459,9 @@ export class PRReviewAgent {
     // Attach aggregate PR quality score
     result.prScore = computePRScore(result.comments);
 
-    // Cache diff for use in postReview path validation
+    // Cache diff and graph context for PR description generation
     this.lastDiff = diff;
+    this.lastGraphContext = graphContext ?? null;
 
     return result;
   }
@@ -609,7 +614,13 @@ export class PRReviewAgent {
       return;
     }
 
-    let bodyToPublish = description.body;
+    // Append Mermaid call-graph diagram when graph context is available
+    const mermaidDiagram = this.lastGraphContext
+      ? serializeMermaidGraph(this.lastGraphContext)
+      : '';
+    let bodyToPublish = mermaidDiagram
+      ? `${description.body}\n${mermaidDiagram}`
+      : description.body;
     const markerStart = '<!-- AGNUSAI:START -->';
     const markerEnd = '<!-- AGNUSAI:END -->';
 

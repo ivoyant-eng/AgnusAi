@@ -253,6 +253,70 @@ export function serializeGraphContext(ctx: GraphReviewContext): string {
   return lines.join('\n') + '\n';
 }
 
+/**
+ * Renders a Mermaid flowchart from a GraphReviewContext for inclusion in PR descriptions.
+ * Shows: changed symbols (centre) ← callers (left) and → callees (right).
+ * Capped at 15 nodes total to keep diagrams readable.
+ */
+export function serializeMermaidGraph(ctx: GraphReviewContext): string {
+  function sanitizeId(raw: string): string {
+    return raw.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 40);
+  }
+  function shortLabel(qualifiedName: string): string {
+    const trimmed = qualifiedName.length > 32 ? qualifiedName.slice(0, 29) + '...' : qualifiedName;
+    // Escape quotes for Mermaid node labels
+    return trimmed.replace(/"/g, "'");
+  }
+
+  const nodeLines: string[] = [];
+  const edgeLines: string[] = [];
+  const seenNodes = new Set<string>();
+
+  function addNode(id: string, label: string, shape: 'changed' | 'caller' | 'callee') {
+    if (seenNodes.has(id)) return;
+    seenNodes.add(id);
+    if (shape === 'changed') {
+      nodeLines.push(`  ${id}["⬅ ${label}"]`);
+    } else {
+      nodeLines.push(`  ${id}["${label}"]`);
+    }
+  }
+
+  const changed = ctx.changedSymbols.slice(0, 5);
+  const callers = ctx.callers.slice(0, 5);
+  const callees = ctx.callees.slice(0, 5);
+
+  for (const sym of changed) {
+    addNode(`C_${sanitizeId(sym.id)}`, shortLabel(sym.qualifiedName), 'changed');
+  }
+  for (const caller of callers) {
+    const nodeId = `K_${sanitizeId(caller.id)}`;
+    addNode(nodeId, shortLabel(caller.qualifiedName), 'caller');
+    for (const ch of changed.slice(0, 3)) {
+      edgeLines.push(`  ${nodeId} --> C_${sanitizeId(ch.id)}`);
+    }
+  }
+  for (const callee of callees) {
+    const nodeId = `E_${sanitizeId(callee.id)}`;
+    addNode(nodeId, shortLabel(callee.qualifiedName), 'callee');
+    for (const ch of changed.slice(0, 3)) {
+      edgeLines.push(`  C_${sanitizeId(ch.id)} --> ${nodeId}`);
+    }
+  }
+
+  if (seenNodes.size === 0) return '';
+
+  const diagram = [
+    '```mermaid',
+    'flowchart LR',
+    ...nodeLines,
+    ...edgeLines,
+    '```',
+  ].join('\n');
+
+  return `\n<details>\n<summary>Call graph</summary>\n\n${diagram}\n\n</details>\n`;
+}
+
 /** Files that are auto-generated or carry no reviewable logic — excluded from LLM diff. */
 const SKIP_FILE_PATTERNS = [
   /^pnpm-lock\.yaml$/,
