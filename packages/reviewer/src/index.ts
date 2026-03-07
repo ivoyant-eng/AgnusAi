@@ -42,6 +42,7 @@ export { runSelfReflection } from './review/self-reflection';
 export { detectSplit } from './review/split-detector';
 export { loadBestPractices } from './review/best-practices-loader';
 export { dispatch as dispatchCommand, COMMAND_REGISTRY } from './commands';
+export type { CommandContext, CommandIntent, CommandResult, CommandDescriptor } from './commands/types';
 
 import { VCSAdapter } from './adapters/vcs/base';
 import { TicketAdapter } from './adapters/ticket/base';

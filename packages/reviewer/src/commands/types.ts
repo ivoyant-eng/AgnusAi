@@ -1,7 +1,5 @@
-import type { Pool } from 'pg';
 import type { VCSAdapter } from '../adapters/vcs/base';
 import type { LLMBackend } from '../llm/base';
-import type { ReviewContext } from '../types';
 
 export interface CommandContext {
   platform: 'github' | 'azure';
@@ -18,7 +16,8 @@ export interface CommandContext {
   userQuery: string;
   /** Full original comment body */
   rawMention: string;
-  pool: Pool;
+  /** Opaque DB pool passed through from API layer — typed as unknown to avoid pg dependency in reviewer */
+  pool: unknown;
 }
 
 export interface CommandIntent {
