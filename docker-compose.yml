@@ -36,6 +36,10 @@ services:
       - SELF_REFLECTION_ENABLED=${SELF_REFLECTION_ENABLED:-false}
       - SELF_REFLECTION_THRESHOLD=${SELF_REFLECTION_THRESHOLD:-7}
       - PRECISION_THRESHOLD=${PRECISION_THRESHOLD:-0.7}
+      # @ryv command system
+      - RYV_BOT_NAME=${RYV_BOT_NAME:-ryv}
+      - COMMANDS_ENABLED=${COMMANDS_ENABLED:-true}
+      - COMMAND_MAX_PER_HOUR=${COMMAND_MAX_PER_HOUR:-10}
       # Rules system
       - RULES_SYSTEM_ENABLED=${RULES_SYSTEM_ENABLED:-true}
       - PUBLIC_URL=${PUBLIC_URL:-https://agnusai.platformnx.com}
