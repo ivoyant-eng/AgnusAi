@@ -664,8 +664,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
         dryRun,
       })
 
-      const { verdict, commentCount, comments } = result
-      return reply.send({ verdict, commentCount, prNumber, repoId, ...(dryRun ? { dryRun: true, comments } : {}) })
+      const { verdict, commentCount, prScore, comments } = result
+      return reply.send({ verdict, commentCount, prScore: prScore ?? null, prNumber, repoId, ...(dryRun ? { dryRun: true, comments } : {}) })
     } catch (err) {
       const msg = (err as Error).message
       console.error(`[repos] Manual review failed for PR ${prNumber}:`, msg)

@@ -160,7 +160,7 @@ async function resolveApplicableRules(
   return candidates.filter(rule => isRuleApplicable(rule, repoId, changedPaths))
 }
 
-export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; comments?: any[] }> {
+export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; comments?: any[] }> {
   const { platform, repoId, repoUrl, prNumber, token, pool } = opts
 
   // 1. Build VCS adapter
@@ -241,7 +241,7 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
   return result
 }
 
-async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; comments?: any[] }> {
+async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; comments?: any[] }> {
   const { platform, repoId, prNumber, baseBranch } = opts
 
   const config: Config = {
@@ -500,6 +500,7 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
     return {
       verdict: (result as any).verdict ?? 'unknown',
       commentCount: comments.length,
+      prScore: (result as any).prScore ?? null,
       reviewId,
       comments: comments.map((c: any) => ({
         path: c.path,
