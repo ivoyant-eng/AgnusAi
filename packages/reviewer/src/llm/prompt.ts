@@ -57,6 +57,34 @@ export function buildReviewPrompt(context: ReviewContext): string {
     ? `\n## Specialist Role\nRole: ${agentRole}\n${agentDirective ?? ''}\n`
     : '';
 
+  // Context manifest — tells the agent exactly what data it has so it stops hedging.
+  const totalAdded = diff.files.reduce((s, f) => s + f.additions, 0);
+  const totalRemoved = diff.files.reduce((s, f) => s + f.deletions, 0);
+  const graphManifestLine = graphContext
+    ? `- Symbol graph: ${graphContext.changedSymbols.length} changed symbols, ` +
+      `${graphContext.callers.length} direct callers, ${graphContext.callees.length} direct callees, ` +
+      `blast radius risk score ${graphContext.blastRadius?.riskScore ?? 0}/100`
+    : '- Symbol graph: not available (repo not indexed)';
+  const ticketManifestLine = (context.tickets?.length ?? 0) > 0
+    ? `- Linked tickets: ${context.tickets.map(t => t.key).join(', ')}`
+    : '- Linked tickets: none';
+  const rulesManifestLine = (graphContext?.enforcedRules?.length ?? 0) > 0
+    ? `- Enforced rules: ${graphContext!.enforcedRules!.length} active`
+    : '- Enforced rules: none';
+  const examplesManifestLine = (graphContext?.priorExamples?.length ?? 0) > 0
+    ? `- Team feedback examples: ${graphContext!.priorExamples!.length} accepted, ` +
+      `${graphContext?.rejectedExamples?.length ?? 0} rejected`
+    : '';
+  const contextManifest = [
+    '\n## Context Available to You',
+    `- Diff: ${diff.files.length} changed files (+${totalAdded}/-${totalRemoved} lines)`,
+    graphManifestLine,
+    ticketManifestLine,
+    rulesManifestLine,
+    ...(examplesManifestLine ? [examplesManifestLine] : []),
+    '\nYou MUST use all available context above. Do not claim you lack context if it is listed here.',
+  ].join('\n');
+
   const ticketsSection = (context.tickets && context.tickets.length > 0)
     ? `\n## Linked Tickets\n` +
       context.tickets.map(t =>
@@ -88,12 +116,19 @@ ${fileList}
 ${diffResult.content}
 ${graphSection}${bestPracticesSection}${skillContext}${examplesSection}${rejectedSection}${rulesSection}
 ${truncationWarning}${roleSection}
+${contextManifest}
 
 ## Review Instructions
 1. Analyse the diff for issues: correctness, security, performance, maintainability
 2. Reference exact file paths and line numbers from the diff
 3. Focus on real issues, not nitpicks
 4. For each issue provide: severity, concrete impacts, a code suggestion, reproduction steps
+
+Before submitting your review, verify each of these:
+- [ ] I checked every caller listed in the Codebase Context for impacts from the changed symbols
+- [ ] I verified each Linked Ticket acceptance criterion against the diff (if tickets present)
+- [ ] I checked each Enforced Rule against the changed code (if rules present)
+- [ ] Every comment I am posting has a specific line reference and is not speculative
 
 ## Output Format
 
