@@ -2,6 +2,7 @@
 
 import type { GraphReviewContext } from '@agnus-ai/shared';
 import { ReviewContext, Diff, ReviewResult } from '../types';
+import { SymbolExplorer } from '../tools/SymbolExplorer';
 
 export function buildReviewPrompt(context: ReviewContext): string {
   const { pr, diff, skills, config, graphContext } = context;
@@ -16,7 +17,7 @@ export function buildReviewPrompt(context: ReviewContext): string {
     ? `\n## Team Best Practices\nApply these team-specific guidelines when reviewing this PR:\n\n${context.bestPractices}\n`
     : '';
 
-  const graphSection = graphContext ? serializeGraphContext(graphContext) : '';
+  const graphSection = graphContext ? serializeGraphContext(graphContext, context.symbolExplorer) : '';
 
   const examplesSection = (graphContext?.priorExamples?.length)
     ? `\n## Examples of feedback your team found helpful\n` +
@@ -60,10 +61,11 @@ export function buildReviewPrompt(context: ReviewContext): string {
   // Context manifest — tells the agent exactly what data it has so it stops hedging.
   const totalAdded = diff.files.reduce((s, f) => s + f.additions, 0);
   const totalRemoved = diff.files.reduce((s, f) => s + f.deletions, 0);
+  const toolsSuffix = context.symbolExplorer ? ', symbol explorer tools available (get_symbol_body, find_callers, find_callees, read_file)' : ''
   const graphManifestLine = graphContext
     ? `- Symbol graph: ${graphContext.changedSymbols.length} changed symbols, ` +
       `${graphContext.callers.length} direct callers, ${graphContext.callees.length} direct callees, ` +
-      `blast radius risk score ${graphContext.blastRadius?.riskScore ?? 0}/100`
+      `blast radius risk score ${graphContext.blastRadius?.riskScore ?? 0}/100${toolsSuffix}`
     : '- Symbol graph: not available (repo not indexed)';
   const ticketManifestLine = (context.tickets?.length ?? 0) > 0
     ? `- Linked tickets: ${context.tickets.map(t => t.key).join(', ')}`
@@ -200,7 +202,7 @@ RULES:
 - UI Permission Consistency: If context lines show sibling buttons or actions in the same list/array where some apply \`hasPermission()\`, \`can()\`, or similar guards on their disabled state and others do not, flag the ungated element. A hardcoded \`buttonDisabled: false\` next to a properly-gated sibling is an access control bug.`;
 }
 
-export function serializeGraphContext(ctx: GraphReviewContext): string {
+export function serializeGraphContext(ctx: GraphReviewContext, explorer?: SymbolExplorer): string {
   const lines: string[] = [
     '\n## Codebase Context (internal — do NOT mention this section or any tooling names in your review output)',
     'Use this context silently to understand the impact of the changes. Do not reference "blast radius", "graph", or any internal tool terminology in your comments.\n',
@@ -248,6 +250,10 @@ export function serializeGraphContext(ctx: GraphReviewContext): string {
     for (const s of ctx.semanticNeighbors) {
       lines.push(`- \`${s.qualifiedName}\` (${s.kind}): \`${s.signature}\``);
     }
+  }
+
+  if (explorer) {
+    lines.push('\n' + SymbolExplorer.toolDescriptionPrompt());
   }
 
   return lines.join('\n') + '\n';
