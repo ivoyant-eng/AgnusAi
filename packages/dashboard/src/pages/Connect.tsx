@@ -350,7 +350,7 @@ function AccordionItem({ open, onToggle, icon, title, description, badge, childr
 
       {/* Animated content panel using CSS grid trick */}
       <div className={`grid transition-[grid-template-rows] duration-200 ease-in-out ${open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
-        <div className="overflow-hidden">
+        <div className={open ? 'overflow-visible' : 'overflow-hidden'}>
           <div className={`px-4 pb-4 transition-opacity duration-200 ${open ? 'opacity-100' : 'opacity-0'}`}>
             {children}
           </div>
