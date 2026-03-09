@@ -638,15 +638,15 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     const { rows } = await pool.query(
       isSystemAdmin(req) && !orgId
-        ? 'SELECT repo_url, platform, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1'
-        : 'SELECT repo_url, platform, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1 AND org_id = $2',
+        ? 'SELECT repo_url, platform, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1'
+        : 'SELECT repo_url, platform, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1 AND org_id = $2',
       isSystemAdmin(req) && !orgId ? [repoId] : [repoId, orgId],
     )
     if (rows.length === 0) {
       return reply.status(404).send({ error: 'Repo not found' })
     }
 
-    const { repo_url: repoUrl, platform, token, github_app_id, github_app_private_key, github_app_installation_id } = rows[0] as any
+    const { repo_url: repoUrl, platform, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id } = rows[0] as any
 
     // Run review synchronously so the caller gets the result
     try {
@@ -660,6 +660,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
         githubAppId: github_app_id ?? undefined,
         githubAppPrivateKey: github_app_private_key ?? undefined,
         githubAppInstallationId: github_app_installation_id ?? undefined,
+        vcsInstallationId: vcs_installation_id ?? undefined,
         pool,
         dryRun,
       })
