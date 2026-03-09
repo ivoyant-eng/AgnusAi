@@ -192,6 +192,74 @@ describe('Dry-run review — PR #51 (requires GITHUB_TOKEN + LLM)', () => {
   }, 180000) // LLM call can be slow on large models
 })
 
+describe('VCS Installations — live API smoke tests', () => {
+  let cookie: string
+
+  beforeAll(async () => {
+    cookie = await login()
+  })
+
+  it('GET /api/vcs-installations without auth → 401', async () => {
+    const res = await get('/api/vcs-installations')
+    expect(res.status).toBe(401)
+  })
+
+  it('GET /api/vcs-installations → 200 with installations array', async () => {
+    const res = await get('/api/vcs-installations', cookie)
+    expect(res.status).toBe(200)
+    const body = await res.json() as any
+    expect(Array.isArray(body.installations)).toBe(true)
+  })
+
+  it('POST /api/vcs-installations without platform → 400', async () => {
+    const res = await post('/api/vcs-installations', { appId: '1', privateKey: 'k', installationId: '2' }, cookie)
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error).toMatch(/platform/i)
+  })
+
+  it('POST /api/vcs-installations github without appId → 400', async () => {
+    const res = await post('/api/vcs-installations', { platform: 'github', installationId: '123' }, cookie)
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /api/vcs-installations with bad GitHub creds → 400', async () => {
+    const res = await post('/api/vcs-installations', {
+      platform: 'github',
+      appId: '0',
+      privateKey: '-----BEGIN RSA PRIVATE KEY-----\nbad\n-----END RSA PRIVATE KEY-----',
+      installationId: '0',
+    }, cookie)
+    // GitHub will reject bad credentials
+    expect(res.status).toBe(400)
+    const body = await res.json() as any
+    expect(body.error).toBeTruthy()
+  })
+
+  it('DELETE /api/vcs-installations/unknown-id → 404', async () => {
+    const res = await fetch(`${BASE}/api/vcs-installations/00000000-0000-0000-0000-000000000000`, {
+      method: 'DELETE',
+      headers: { cookie },
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('POST /api/vcs-installations/unknown-id/repos → 404', async () => {
+    const res = await post('/api/vcs-installations/00000000-0000-0000-0000-000000000000/repos', {}, cookie)
+    expect(res.status).toBe(404)
+  })
+
+  it('GET /api/repos response includes vcs_installation_id field on each repo', async () => {
+    const res = await get('/api/repos', cookie)
+    expect(res.status).toBe(200)
+    const repos = await res.json() as any[]
+    // Every row must carry the field (value may be null for existing repos)
+    for (const repo of repos) {
+      expect('vcsInstallationId' in repo || 'vcs_installation_id' in repo).toBe(true)
+    }
+  })
+})
+
 describe('Feedback endpoint', () => {
   it('GET /api/feedback with invalid token → 400 or 403', async () => {
     const res = await get('/api/feedback?id=fake-id&signal=accepted&token=badtoken')

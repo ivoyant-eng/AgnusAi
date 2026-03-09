@@ -1,92 +1,128 @@
 import { useState, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { ArrowRight, Save, Trash2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Plus, X, ChevronDown, Key, Puzzle } from 'lucide-react'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 
-interface SavedCredential {
-  id: string
-  label: string
-  token: string
-  platform: 'github' | 'azure'
-}
+import { useWebhookConfig } from '@/hooks/useWebhookConfig'
+import { useVcsInstallations } from '@/hooks/useVcsInstallations'
+import { useRepoPicker } from '@/hooks/useRepoPicker'
+import { useSavedCredentials } from '@/hooks/useSavedCredentials'
 
-const CREDS_KEY = 'ryv:saved_credentials'
+import { WebhookConfigPanel } from '@/components/connect/WebhookConfigPanel'
+import { PlatformSelector } from '@/components/connect/PlatformSelector'
+import { AddInstallationForm } from '@/components/connect/AddInstallationForm'
+import { InstallationCard } from '@/components/connect/InstallationCard'
+import { PatForm } from '@/components/connect/PatForm'
 
-function loadCredentials(): SavedCredential[] {
-  try { return JSON.parse(localStorage.getItem(CREDS_KEY) ?? '[]') } catch { return [] }
-}
-
-function saveCredential(cred: SavedCredential) {
-  const existing = loadCredentials().filter(c => c.id !== cred.id)
-  localStorage.setItem(CREDS_KEY, JSON.stringify([...existing, cred]))
-}
-
-function deleteCredential(id: string) {
-  const updated = loadCredentials().filter(c => c.id !== id)
-  localStorage.setItem(CREDS_KEY, JSON.stringify(updated))
-}
+type AccordionSection = 'installation' | 'pat'
 
 export default function Connect() {
   const navigate = useNavigate()
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [savedCreds, setSavedCreds] = useState<SavedCredential[]>([])
-  const [saveLabel, setSaveLabel] = useState('')
-  const [showSaveInput, setShowSaveInput] = useState(false)
-  const [form, setForm] = useState({
-    repoUrl: '',
-    token: '',
-    platform: 'github' as 'github' | 'azure',
-    repoPath: '',
-    branchesInput: '',
-  })
+  const [searchParams, setSearchParams] = useSearchParams()
 
-  // Reload saved creds when platform changes
+  const [platform, setPlatform] = useState<'github' | 'azure'>('github')
+  const [oauthSuccess, setOauthSuccess] = useState<string | null>(null)
+  const [globalError, setGlobalError] = useState('')
+  const [patLoading, setPatLoading] = useState(false)
+  const [openSection, setOpenSection] = useState<AccordionSection>('installation')
+
+  // ── Handle OAuth callback query params (?azure_connected / ?azure_error) ──
   useEffect(() => {
-    setSavedCreds(loadCredentials().filter(c => c.platform === form.platform))
-  }, [form.platform])
-
-  function handleSelectCredential(id: string) {
-    const cred = savedCreds.find(c => c.id === id)
-    if (cred) setForm(f => ({ ...f, token: cred.token }))
-  }
-
-  function handleSaveCredential() {
-    if (!saveLabel.trim() || !form.token) return
-    const cred: SavedCredential = {
-      id: Date.now().toString(),
-      label: saveLabel.trim(),
-      token: form.token,
-      platform: form.platform,
+    const connected = searchParams.get('azure_connected')
+    const oauthError = searchParams.get('azure_error')
+    if (connected) {
+      setOauthSuccess('Azure DevOps connected successfully!')
+      setPlatform('azure')
+      setSearchParams({})
+    } else if (oauthError) {
+      setGlobalError(`Azure OAuth failed: ${oauthError}`)
+      setPlatform('azure')
+      setSearchParams({})
     }
-    saveCredential(cred)
-    setSavedCreds(loadCredentials().filter(c => c.platform === form.platform))
-    setSaveLabel('')
-    setShowSaveInput(false)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // ── Hooks ─────────────────────────────────────────────────────────────────
+  const webhook = useWebhookConfig(platform)
+  const installations = useVcsInstallations(platform)
+  const picker = useRepoPicker()
+  const savedCreds = useSavedCredentials(platform)
+
+  // Switch to PAT section if there are no installations (first-time users)
+  useEffect(() => {
+    if (installations.installations.length === 0 && !installations.showAddForm) {
+      // keep installation open so they see the empty state and "Add" CTA
+    }
+  }, [installations.installations.length, installations.showAddForm])
+
+  function toggle(section: AccordionSection) {
+    setOpenSection(prev => (prev === section ? section : section))
+    setOpenSection(section)
   }
 
-  function handleDeleteCredential(id: string) {
-    deleteCredential(id)
-    setSavedCreds(loadCredentials().filter(c => c.platform === form.platform))
-  }
-
-  async function handleSubmit(e: React.FormEvent) {
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  async function handleSaveInstallation(e: React.FormEvent) {
     e.preventDefault()
-    setLoading(true)
-    setError('')
+    await installations.saveInstallation(webhook.redirectUri)
+  }
+
+  async function handleReauthorize(instId: string) {
+    const inst = installations.installations.find(i => i.id === instId)
+    if (!inst) return
+    const authUrl = await installations.reauthorize(inst, webhook.redirectUri)
+    if (authUrl) {
+      window.open(authUrl, '_blank', 'noopener,noreferrer')
+    } else {
+      setGlobalError('Failed to get authorization URL')
+    }
+  }
+
+  async function connectViaInstallation(
+    instId: string,
+    repo: { url: string; fullName: string },
+    branches: string[],
+  ) {
+    picker.patchPicker(instId, { connectError: '', loading: true })
     try {
-      const branches = form.branchesInput
-        ? form.branchesInput.split(',').map(s => s.trim()).filter(Boolean)
-        : ['main']
-      const { branchesInput: _, ...rest } = form
       const res = await fetch('/api/repos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ ...rest, branches }),
+        body: JSON.stringify({ repoUrl: repo.url, platform, branches, vcsInstallationId: instId }),
+      })
+      const data = await res.json() as { repoId?: string; error?: string }
+      if (!res.ok) throw new Error(data.error ?? 'Request failed')
+      navigate(`/app/indexing/${data.repoId}?branch=${encodeURIComponent(branches[0])}`)
+    } catch (err) {
+      picker.patchPicker(instId, { connectError: (err as Error).message })
+    } finally {
+      picker.patchPicker(instId, { loading: false })
+    }
+  }
+
+  async function handlePatSubmit(form: {
+    repoUrl: string
+    token: string
+    repoPath: string
+    branchesInput: string
+  }) {
+    setPatLoading(true)
+    setGlobalError('')
+    try {
+      const branches = form.branchesInput
+        ? form.branchesInput.split(',').map(s => s.trim()).filter(Boolean)
+        : ['main']
+      const res = await fetch('/api/repos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          repoUrl: form.repoUrl,
+          platform,
+          token: form.token,
+          repoPath: form.repoPath || undefined,
+          branches,
+        }),
       })
       if (!res.ok) {
         const d = await res.json() as { error: string }
@@ -95,207 +131,256 @@ export default function Connect() {
       const { repoId } = await res.json() as { repoId: string }
       navigate(`/app/indexing/${repoId}?branch=${encodeURIComponent(branches[0])}`)
     } catch (err) {
-      setError((err as Error).message)
+      setGlobalError((err as Error).message)
     } finally {
-      setLoading(false)
+      setPatLoading(false)
     }
   }
 
+  const instCount = installations.installations.length
+
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-16 items-start">
 
-      {/* ── Left col: context ── */}
+      {/* ── Left column: steps + webhook config ── */}
       <div>
         <p className="label-meta mb-4">Connect a Repository</p>
         <h1 className="text-[clamp(1.8rem,3.5vw,3rem)] font-bold leading-none tracking-tight text-foreground mb-10">
-          Index.<br />Review.<br />Ship.
+          Index. Review. Ship.
         </h1>
 
-        {/* Steps */}
-        <div className="border-t border-border">
-          {[
-            { n: '01', title: 'Connect', desc: 'Enter your repo URL and a personal access token. Ryv uses it to clone and post review comments.' },
-            { n: '02', title: 'Index', desc: 'Tree-sitter WASM parses every file. Symbols and call edges go into Postgres + pgvector.' },
-            { n: '03', title: 'Review', desc: 'Every PR webhook triggers a 2-hop BFS. Blast radius is surfaced to the LLM before it writes a single comment.' },
-          ].map((s, i) => (
-            <div key={s.n} className="flex items-start gap-8 border-b border-border py-5">
-              <span className={`num-display w-8 shrink-0 ${i === 0 ? 'text-foreground' : ''}`}>{s.n}</span>
-              <div>
-                <p className={`text-sm font-semibold mb-1 ${i === 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
-                  {s.title}
-                </p>
-                <p className="label-meta leading-relaxed">{s.desc}</p>
-              </div>
-            </div>
-          ))}
-        </div>
+        <StepList />
 
-        {/* Hint block */}
-        <div className="mt-8 border border-border p-4">
-          <p className="label-meta mb-1" style={{ color: 'var(--lp-accent)' }}>// quickstart</p>
-          <p className="font-mono text-xs text-muted-foreground leading-relaxed">
-            docker compose up --build<br />
-            <span style={{ color: 'var(--syn-cmt)' }}># then connect any GitHub or Azure DevOps repo here</span>
-          </p>
+        <div className="mt-6">
+          <WebhookConfigPanel
+            platform={platform}
+            webhookUrl={webhook.webhookUrl}
+            redirectUri={webhook.redirectUri}
+            secretPreview={webhook.secretPreview}
+            revealedSecret={webhook.revealedSecret}
+            webhookCopied={webhook.webhookCopied}
+            secretCopied={webhook.secretCopied}
+            rotating={webhook.rotating}
+            activeOrgSlug={webhook.activeOrgSlug}
+            onCopyWebhook={webhook.copyWebhook}
+            onCopySecret={webhook.copySecret}
+            onRotateSecret={webhook.rotateSecret}
+          />
         </div>
       </div>
 
-      {/* ── Right col: form ── */}
+      {/* ── Right column: connect form ── */}
       <div className="border border-border">
-        {/* Form header bar */}
+        {/* Terminal-style titlebar */}
         <div className="flex items-center gap-2 px-5 py-3 border-b border-border bg-card">
           <div style={{ display: 'flex', gap: '5px' }}>
-            <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: '#FF5F57', display: 'block' }} />
-            <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: '#FEBC2E', display: 'block' }} />
-            <span style={{ width: '9px', height: '9px', borderRadius: '50%', background: '#28C840', display: 'block' }} />
+            {['#FF5F57', '#FEBC2E', '#28C840'].map(color => (
+              <span key={color} style={{ width: 9, height: 9, borderRadius: '50%', background: color, display: 'block' }} />
+            ))}
           </div>
           <span className="font-mono text-xs text-muted-foreground ml-2">connect-repo.ts</span>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
-          <div className="space-y-2">
-            <Label htmlFor="platform">Platform</Label>
-            <Select
-              value={form.platform}
-              onValueChange={v => setForm(f => ({ ...f, platform: v as any }))}
-            >
-              <SelectTrigger id="platform">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="github">GitHub</SelectItem>
-                <SelectItem value="azure">Azure DevOps</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="repoUrl">Repository URL</Label>
-            <Input
-              id="repoUrl"
-              placeholder="https://github.com/owner/repo"
-              value={form.repoUrl}
-              onChange={e => setForm(f => ({ ...f, repoUrl: e.target.value }))}
-              required
-            />
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="token">Access Token</Label>
-
-            {/* Saved credentials picker */}
-            {savedCreds.length > 0 && (
-              <div className="flex gap-2 items-center">
-                <Select onValueChange={handleSelectCredential}>
-                  <SelectTrigger className="text-xs h-8">
-                    <SelectValue placeholder="Use saved credential…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {savedCreds.map(c => (
-                      <SelectItem key={c.id} value={c.id}>
-                        <span className="flex items-center justify-between gap-6 w-full">
-                          <span>{c.label}</span>
-                          <span className="font-mono text-muted-foreground">{c.token.slice(0, 8)}…</span>
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {/* Delete button shown after a cred is selected — manage via label */}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-                  title="Manage saved credentials"
-                  onClick={() => {
-                    const id = savedCreds.find(c => c.token === form.token)?.id
-                    if (id) handleDeleteCredential(id)
-                  }}
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            )}
-
-            <Input
-              id="token"
-              type="password"
-              placeholder={form.platform === 'azure' ? 'PAT from dev.azure.com…' : 'ghp_…'}
-              value={form.token}
-              onChange={e => setForm(f => ({ ...f, token: e.target.value }))}
-            />
-
-            {/* Save current token */}
-            {form.token && !showSaveInput && (
-              <button
-                type="button"
-                className="label-meta flex items-center gap-1 hover:text-foreground transition-colors"
-                onClick={() => setShowSaveInput(true)}
-              >
-                <Save className="h-3 w-3" /> Save this token
+        <div className="p-6 space-y-4">
+          {/* OAuth success banner */}
+          {oauthSuccess && (
+            <div className="border border-green-600 bg-green-50 px-3 py-2.5 flex items-center justify-between gap-3">
+              <p className="font-mono text-xs text-green-800">{oauthSuccess}</p>
+              <button type="button" onClick={() => setOauthSuccess(null)} className="label-meta hover:text-foreground shrink-0">
+                <X className="h-3 w-3" />
               </button>
-            )}
-            {showSaveInput && (
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Label, e.g. Ashish Azure PAT"
-                  value={saveLabel}
-                  onChange={e => setSaveLabel(e.target.value)}
-                  className="h-8 text-xs"
-                  onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleSaveCredential())}
-                  autoFocus
-                />
-                <Button type="button" size="sm" className="h-8 text-xs shrink-0" onClick={handleSaveCredential}>
-                  Save
-                </Button>
-                <Button type="button" variant="ghost" size="sm" className="h-8 text-xs shrink-0" onClick={() => setShowSaveInput(false)}>
-                  Cancel
-                </Button>
-              </div>
-            )}
-
-            <p className="label-meta">Required to post review comments to PRs.</p>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="branches">Branches</Label>
-            <Input
-              id="branches"
-              placeholder="main, develop"
-              value={form.branchesInput}
-              onChange={e => setForm(f => ({ ...f, branchesInput: e.target.value }))}
-            />
-            <p className="label-meta">Comma-separated. Defaults to <code className="font-mono">main</code>.</p>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="repoPath">
-              Local Path <span className="label-meta">(optional)</span>
-            </Label>
-            <Input
-              id="repoPath"
-              placeholder="/repos/my-repo  or leave blank to auto-clone"
-              value={form.repoPath}
-              onChange={e => setForm(f => ({ ...f, repoPath: e.target.value }))}
-            />
-            <p className="label-meta">
-              Leave blank — Ryv auto-clones using the token above.
-            </p>
-          </div>
-
-          {error && (
-            <p className="font-mono text-xs text-destructive border border-destructive px-3 py-2">
-              {error}
-            </p>
+            </div>
           )}
 
-          <Button type="submit" size="lg" disabled={loading} className="w-full gap-3 mt-2">
-            {loading ? 'Connecting...' : 'Connect Repository'}
-            {!loading && <ArrowRight className="h-3.5 w-3.5" />}
-          </Button>
-        </form>
+          {/* Platform selector */}
+          <div className="space-y-2">
+            <Label>Platform</Label>
+            <PlatformSelector value={platform} onChange={setPlatform} />
+          </div>
+
+          {/* ── Accordion ── */}
+          <div className="border border-border divide-y divide-border">
+
+            {/* Section 1: App Installation */}
+            <AccordionItem
+              open={openSection === 'installation'}
+              onToggle={() => toggle('installation')}
+              icon={<Puzzle className="h-3.5 w-3.5" />}
+              title={platform === 'github' ? 'GitHub App Installation' : 'Azure DevOps Connection'}
+              description={platform === 'github' ? 'Recommended · posts as bot account' : 'Recommended · Entra ID OAuth'}
+              badge={instCount > 0 ? String(instCount) : undefined}
+            >
+              <div className="space-y-3 pt-1">
+                {/* Add button */}
+                <div className="flex items-center justify-between">
+                  <p className="label-meta">
+                    {instCount === 0
+                      ? platform === 'github' ? 'No installations yet.' : 'No connections yet.'
+                      : platform === 'github' ? `${instCount} installation${instCount > 1 ? 's' : ''}` : `${instCount} connection${instCount > 1 ? 's' : ''}`}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={installations.showAddForm ? installations.closeAddForm : installations.openAddForm}
+                    className="flex items-center gap-1 label-meta hover:text-foreground transition-colors"
+                  >
+                    <Plus className="h-3 w-3" />
+                    {installations.showAddForm ? 'Cancel' : platform === 'github' ? 'Add' : 'Add'}
+                  </button>
+                </div>
+
+                {/* Add form */}
+                {installations.showAddForm && (
+                  <AddInstallationForm
+                    platform={platform}
+                    form={installations.addForm}
+                    saving={installations.addSaving}
+                    error={installations.addError}
+                    redirectUri={webhook.redirectUri}
+                    onChange={patch => installations.setAddForm(f => ({ ...f, ...patch }))}
+                    onSubmit={handleSaveInstallation}
+                    onCancel={installations.closeAddForm}
+                  />
+                )}
+
+                {/* Empty CTA */}
+                {instCount === 0 && !installations.showAddForm && (
+                  <button
+                    type="button"
+                    onClick={installations.openAddForm}
+                    className="w-full border border-dashed border-border py-4 font-mono text-xs text-muted-foreground hover:text-[#E85A1A] hover:border-[#E85A1A]/50 transition-colors"
+                  >
+                    {platform === 'github' ? '+ Set up a GitHub App →' : '+ Add Azure DevOps connection →'}
+                  </button>
+                )}
+
+                {/* Installation cards */}
+                {installations.installations.map(inst => (
+                  <InstallationCard
+                    key={inst.id}
+                    inst={inst}
+                    ps={picker.getPicker(inst.id)}
+                    pickerRef={el => picker.setPickerRef(inst.id, el)}
+                    onFetch={() => picker.fetchRepos(inst.id)}
+                    onPickerToggle={() => {
+                      const ps = picker.getPicker(inst.id)
+                      picker.patchPicker(inst.id, { open: !ps.open, search: '' })
+                    }}
+                    onSearch={s => picker.patchPicker(inst.id, { search: s })}
+                    onSelect={repo => picker.patchPicker(inst.id, { selected: repo, open: false, search: '' })}
+                    onRemove={() => installations.removeInstallation(inst.id)}
+                    onConnect={(repo, branches) => connectViaInstallation(inst.id, repo, branches)}
+                    onReauthorize={() => handleReauthorize(inst.id)}
+                  />
+                ))}
+              </div>
+            </AccordionItem>
+
+            {/* Section 2: PAT */}
+            <AccordionItem
+              open={openSection === 'pat'}
+              onToggle={() => toggle('pat')}
+              icon={<Key className="h-3.5 w-3.5" />}
+              title="Personal Access Token"
+              description="Quick setup · reviews post as your user"
+            >
+              <PatForm
+                platform={platform}
+                savedCreds={savedCreds.creds}
+                loading={patLoading}
+                error={globalError}
+                onSubmit={handlePatSubmit}
+                onSaveCredential={savedCreds.save}
+                onDeleteCredential={savedCreds.remove}
+              />
+            </AccordionItem>
+
+          </div>
+        </div>
       </div>
+    </div>
+  )
+}
+
+// ── Accordion item ────────────────────────────────────────────────────────────
+
+interface AccordionItemProps {
+  open: boolean
+  onToggle: () => void
+  icon: React.ReactNode
+  title: string
+  description: string
+  badge?: string
+  children: React.ReactNode
+}
+
+function AccordionItem({ open, onToggle, icon, title, description, badge, children }: AccordionItemProps) {
+  return (
+    <div>
+      {/* Header button */}
+      <button
+        type="button"
+        onClick={onToggle}
+        className={`w-full flex items-center justify-between px-4 py-3.5 text-left transition-colors group ${
+          open ? 'bg-muted/10' : 'hover:bg-muted/5'
+        }`}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <span className={`shrink-0 transition-colors ${open ? 'text-[#E85A1A]' : 'text-muted-foreground group-hover:text-foreground'}`}>
+            {icon}
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`font-mono text-xs font-semibold tracking-wide transition-colors ${open ? 'text-foreground' : 'text-muted-foreground group-hover:text-foreground'}`}>
+                {title}
+              </span>
+              {badge && (
+                <span className="font-mono text-xs px-1.5 py-0.5 bg-[#E85A1A]/10 text-[#E85A1A] border border-[#E85A1A]/20 leading-none">
+                  {badge}
+                </span>
+              )}
+            </div>
+            <p className="label-meta text-xs truncate mt-0.5">{description}</p>
+          </div>
+        </div>
+        <ChevronDown
+          className={`h-3.5 w-3.5 shrink-0 ml-4 text-muted-foreground transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {/* Animated content panel using CSS grid trick */}
+      <div className={`grid transition-[grid-template-rows] duration-200 ease-in-out ${open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+        <div className={open ? 'overflow-visible' : 'overflow-hidden'}>
+          <div className={`px-4 pb-4 transition-opacity duration-200 ${open ? 'opacity-100' : 'opacity-0'}`}>
+            {children}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Static 3-step explainer ───────────────────────────────────────────────────
+
+function StepList() {
+  const steps = [
+    { n: '01', title: 'Connect', desc: 'Pick a repo from your saved GitHub App installation. Ryv uses it to clone and post review comments.' },
+    { n: '02', title: 'Index', desc: 'Tree-sitter WASM parses every file. Symbols and call edges go into Postgres + pgvector.' },
+    { n: '03', title: 'Review', desc: 'Every PR webhook triggers a 2-hop BFS. Blast radius is surfaced to the LLM before it writes a single comment.' },
+  ]
+  return (
+    <div className="border-t border-border">
+      {steps.map((s, i) => (
+        <div key={s.n} className="flex items-start gap-8 border-b border-border py-5">
+          <span className={`num-display w-8 shrink-0 ${i === 0 ? 'text-foreground' : ''}`}>{s.n}</span>
+          <div>
+            <p className={`text-sm font-semibold mb-1 ${i === 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
+              {s.title}
+            </p>
+            <p className="label-meta leading-relaxed">{s.desc}</p>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

@@ -60,6 +60,7 @@ import { validateSuggestions, type ParseFn } from './review/suggestion-validator
 import { runSelfReflection } from './review/self-reflection';
 import { detectSplit, formatSplitSuggestion } from './review/split-detector';
 import { loadBestPractices } from './review/best-practices-loader';
+import { shouldSkipFile } from './llm/prompt';
 
 /**
  * Result of an incremental review check
@@ -211,16 +212,18 @@ export class PRReviewAgent {
     const changedFilePaths = new Set(incrementalResult.diff.files.map(f => f.path));
     const relevantFiles = files.filter(f => changedFilePaths.has(f.path));
 
-    // Get linked tickets
-    const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
+    // Get linked tickets (opt-in — ticket integration is behind a feature flag)
     const tickets = [];
-    for (const adapter of this.tickets) {
-      for (const id of linkedTicketIds) {
-        try {
-          const ticket = await adapter.getTicket(id.key);
-          tickets.push(ticket);
-        } catch {
-          // Ticket not found
+    if (this.config.review?.ticketFetchEnabled) {
+      const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
+      for (const adapter of this.tickets) {
+        for (const id of linkedTicketIds) {
+          try {
+            const ticket = await adapter.getTicket(id.key);
+            tickets.push(ticket);
+          } catch {
+            // Ticket not found in this adapter
+          }
         }
       }
     }
@@ -335,16 +338,37 @@ export class PRReviewAgent {
     const diff = await this.vcs.getDiff(prId);
     const files = await this.vcs.getFiles(prId);
 
-    // 2. Get linked tickets
-    const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
+    // 1b. Short-circuit: if every changed file is a lock/generated file or a
+    //     package manifest with only version-bump changes, skip the LLM entirely.
+    const MANIFEST_PATTERN = /^(package\.json|Cargo\.toml|pyproject\.toml|requirements.*\.txt|go\.mod|build\.gradle(\.kts)?|pom\.xml|\.csproj|pubspec\.yaml)$/;
+    const reviewableFiles = diff.files.filter(f => !shouldSkipFile(f.path));
+    const isDependencyOnlyPR = reviewableFiles.length > 0 &&
+      reviewableFiles.every(f => {
+        const base = f.path.split('/').pop() ?? f.path;
+        return MANIFEST_PATTERN.test(base) && (f.additions + f.deletions) <= 10;
+      });
+    if (isDependencyOnlyPR) {
+      console.log(`[review] Dependency-only PR detected (${reviewableFiles.map(f => f.path).join(', ')}) — auto-approving, no LLM call.`);
+      return {
+        summary: 'Only dependency version changes detected. No code logic was modified.',
+        comments: [],
+        suggestions: [],
+        verdict: 'approve',
+      };
+    }
+
+    // 2. Get linked tickets (opt-in — ticket integration is behind a feature flag)
     const tickets = [];
-    for (const adapter of this.tickets) {
-      for (const id of linkedTicketIds) {
-        try {
-          const ticket = await adapter.getTicket(id.key);
-          tickets.push(ticket);
-        } catch {
-          // Ticket not found in this adapter
+    if (this.config.review?.ticketFetchEnabled) {
+      const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
+      for (const adapter of this.tickets) {
+        for (const id of linkedTicketIds) {
+          try {
+            const ticket = await adapter.getTicket(id.key);
+            tickets.push(ticket);
+          } catch {
+            // Ticket not found in this adapter
+          }
         }
       }
     }

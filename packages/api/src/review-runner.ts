@@ -12,6 +12,7 @@ import type { Pool } from 'pg'
 const SKILLS_PATH = path.join(require.resolve('@agnus-ai/reviewer'), '../../..', 'skills')
 import { getRepo } from './graph-cache'
 import { createEmbeddingAdapter } from './embedding-factory'
+import { getAzureOAuthToken } from './azure-oauth'
 import type { EnforcedRuleContext, GraphReviewContext } from '@agnus-ai/shared'
 import {
   DEFAULT_REPO_PR_DESCRIPTION_SETTINGS,
@@ -79,6 +80,11 @@ export interface ReviewRunOptions {
   repoUrl: string
   prNumber: number
   token?: string
+  githubAppId?: string
+  githubAppPrivateKey?: string
+  githubAppInstallationId?: string
+  /** VCS installation ID — used to fetch a fresh Azure OAuth token when token is absent */
+  vcsInstallationId?: string
   baseBranch: string
   pool: Pool
   /** Azure only: if true, gates on iteration DB state and diffs only new commits since last reviewed iteration */
@@ -161,14 +167,24 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
   let vcs: any
   let azureAdapter: AzureDevOpsAdapter | undefined
   if (platform === 'github') {
-    if (!token) throw new Error('GitHub token required for review')
     // https://github.com/{owner}/{repo}
     const urlParts = repoUrl.replace(/\/$/, '').split('/')
     const owner = urlParts[urlParts.length - 2] ?? ''
     const repo = urlParts[urlParts.length - 1] ?? ''
-    vcs = new GitHubAdapter({ token, owner, repo })
+    const appRow = opts.githubAppId && opts.githubAppPrivateKey && opts.githubAppInstallationId
+      ? { appId: opts.githubAppId, privateKey: opts.githubAppPrivateKey, installationId: opts.githubAppInstallationId }
+      : null
+    if (!appRow && !token) throw new Error('GitHub token or App credentials required for review')
+    vcs = new GitHubAdapter({ token, owner, repo, ...appRow })
   } else {
-    if (!token) throw new Error('Azure token required for review')
+    // Resolve Azure token: prefer passed-in token (PAT), fall back to OAuth installation token
+    let azureToken = token
+    let azureAuthType: 'pat' | 'bearer' = 'pat'
+    if (!azureToken && opts.vcsInstallationId) {
+      azureToken = await getAzureOAuthToken(pool, opts.vcsInstallationId)
+      azureAuthType = 'bearer'
+    }
+    if (!azureToken) throw new Error('Azure token required for review')
     // https://dev.azure.com/{org}/{project}/_git/{repo}
     const url = new URL(repoUrl)
     const parts = url.pathname.split('/').filter(Boolean)
@@ -176,7 +192,7 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     const organization = parts[0] ?? ''
     const project = parts[1] ?? ''
     const repository = parts[parts.length - 1] ?? ''
-    azureAdapter = new AzureDevOpsAdapter({ organization, project, repository, token })
+    azureAdapter = new AzureDevOpsAdapter({ organization, project, repository, token: azureToken, authType: azureAuthType })
     vcs = azureAdapter
   }
 
@@ -242,7 +258,7 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
       maxDiffSize: process.env.MAX_DIFF_SIZE ? parseInt(process.env.MAX_DIFF_SIZE) : 150000,
       focusAreas: [],
       ignorePaths: ['node_modules', 'dist', 'build', '.git'],
-      precisionThreshold: process.env.PRECISION_THRESHOLD ? parseFloat(process.env.PRECISION_THRESHOLD) : 0.7,
+      precisionThreshold: process.env.PRECISION_THRESHOLD ? parseFloat(process.env.PRECISION_THRESHOLD) : 0.75,
       multiAgentEnabled: (process.env.MULTI_AGENT_ENABLED ?? 'false').toLowerCase() === 'true',
       reviewMode: ((process.env.REVIEW_MODE ?? 'single').toLowerCase() as 'single' | 'fast' | 'thorough' | 'auto'),
       enabledAgents: parseEnabledAgents(process.env.ENABLED_AGENTS),

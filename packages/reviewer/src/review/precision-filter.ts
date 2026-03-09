@@ -15,7 +15,7 @@ export interface PrecisionFilterConfig {
  * Default precision filter configuration
  */
 export const DEFAULT_PRECISION_CONFIG: PrecisionFilterConfig = {
-  minConfidence: 0.7,
+  minConfidence: 0.75,
 };
 
 /**

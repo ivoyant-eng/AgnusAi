@@ -33,6 +33,14 @@ export default defineConfig({
         ],
       },
       {
+        text: 'Connecting Repositories',
+        items: [
+          { text: 'Overview', link: '/guide/connect-overview' },
+          { text: 'GitHub — App Installation', link: '/guide/github-app' },
+          { text: 'Azure DevOps — Entra ID & PAT', link: '/guide/azure-devops' },
+        ],
+      },
+      {
         text: 'Architecture',
         items: [
           { text: 'Overview', link: '/architecture/overview' },

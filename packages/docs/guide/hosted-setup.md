@@ -98,6 +98,10 @@ Each org has a dedicated webhook path so secrets and routing are isolated.
 4. **Secret:** the webhook secret from **Settings → Webhook Secrets** in the dashboard
 5. **Events:** `Push` + `Pull requests`
 
+::: tip GitHub App (recommended for teams)
+Instead of a PAT, you can authenticate as a GitHub App so reviews post as a named bot identity with fine-grained, per-repo permissions. See [GitHub App Auth →](./github-app).
+:::
+
 ### Managing Webhook Secrets
 
 Webhook secrets are managed per org and per platform in **Settings → Webhook Secrets**. You can generate or rotate a secret without redeploying — just update the secret in GitHub/Azure after rotating.

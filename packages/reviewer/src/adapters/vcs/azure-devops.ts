@@ -35,6 +35,8 @@ interface AzureDevOpsConfig {
   project: string;
   repository: string;
   token: string;
+  /** When 'bearer', uses OAuth access token (Authorization: Bearer). Default is PAT basic auth. */
+  authType?: 'pat' | 'bearer';
   baseUrl?: string;
 }
 
@@ -44,6 +46,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   private project: string;
   private repository: string;
   private token: string;
+  private authType: 'pat' | 'bearer';
   private baseUrl: string;
   /** When set, getDiff compares latest iteration vs this iteration ID. 0 = full diff. */
   compareToIteration?: number;
@@ -67,6 +70,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     this.project = config.project;
     this.repository = config.repository;
     this.token = config.token;
+    this.authType = config.authType ?? 'pat';
     this.baseUrl = config.baseUrl || 'https://dev.azure.com';
   }
 
@@ -81,12 +85,10 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   private getAuthHeaders(): Record<string, string> {
-    // Azure DevOps uses Basic auth with PAT (password is empty)
-    const encoded = Buffer.from(`:${this.token}`).toString('base64');
-    return {
-      'Authorization': `Basic ${encoded}`,
-      'Content-Type': 'application/json'
-    };
+    const authHeader = this.authType === 'bearer'
+      ? `Bearer ${this.token}`
+      : `Basic ${Buffer.from(`:${this.token}`).toString('base64')}`;
+    return { 'Authorization': authHeader, 'Content-Type': 'application/json' };
   }
 
   

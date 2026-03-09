@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
 import { getOrLoadRepo } from '../graph-cache'
 import { runReview } from '../review-runner'
+import { resolveCloneToken, buildAuthenticatedUrl } from '../git-utils'
 import {
   normalizeGithubEvent,
   normalizeAzureEvent,
@@ -203,11 +204,8 @@ async function handleAskCommand(
   const commentId = (payload.comment as any)?.id as number
   const baseBranch = issue.pull_request?.base?.ref ?? 'main'
 
-  const tokenRes = await pool.query<{ token: string | null }>(
-    'SELECT token FROM repos WHERE repo_id = $1',
-    [repoId],
-  )
-  const token = tokenRes.rows[0]?.token ?? undefined
+  const repoCreds = await getRepoCreds(pool, repoId)
+  const token = repoCreds.token
 
   setImmediate(() =>
     runAsk({ platform, repoId, repoUrl, prNumber, question, commentId, token, baseBranch, pool })
@@ -237,13 +235,18 @@ async function dispatchPREvent(event: PREvent, pool: Pool): Promise<void> {
       const { prNumber, baseBranch, prAction, incrementalDiff, incrementalReview } = kind
       setImmediate(async () => {
         try {
+          const repoCreds = await getRepoCreds(pool, repoId)
           await runReview({
             platform,
             repoId,
             repoUrl,
             prNumber,
             baseBranch,
-            token: await getRepoToken(pool, repoId),
+            token: repoCreds.token,
+            githubAppId: repoCreds.githubAppId,
+            githubAppPrivateKey: repoCreds.githubAppPrivateKey,
+            githubAppInstallationId: repoCreds.githubAppInstallationId,
+            vcsInstallationId: repoCreds.vcsInstallationId,
             pool,
             incrementalDiff,
             incrementalReview,
@@ -283,12 +286,20 @@ function verifySharedWebhookSecret(secret: string, provided?: string): boolean {
   }
 }
 
-async function getRepoToken(pool: Pool, repoId: string): Promise<string | undefined> {
-  const res = await pool.query<{ token: string | null }>(
-    'SELECT token FROM repos WHERE repo_id = $1',
+async function getRepoCreds(pool: Pool, repoId: string): Promise<{ token?: string; githubAppId?: string; githubAppPrivateKey?: string; githubAppInstallationId?: string; vcsInstallationId?: string }> {
+  const res = await pool.query<{ token: string | null; github_app_id: string | null; github_app_private_key: string | null; github_app_installation_id: string | null; vcs_installation_id: string | null }>(
+    'SELECT token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1',
     [repoId],
   )
-  return res.rows[0]?.token ?? undefined
+  const row = res.rows[0]
+  if (!row) return {}
+  return {
+    token: row.token ?? undefined,
+    githubAppId: row.github_app_id ?? undefined,
+    githubAppPrivateKey: row.github_app_private_key ?? undefined,
+    githubAppInstallationId: row.github_app_installation_id ?? undefined,
+    vcsInstallationId: row.vcs_installation_id ?? undefined,
+  }
 }
 
 /**
@@ -318,13 +329,34 @@ async function getChangedFilesFromGit(repoPath: string): Promise<string[]> {
  */
 async function runPushIndex(pool: Pool, repoId: string, branch: string, logPrefix: string): Promise<void> {
   try {
-    const repoPathRow = await pool.query<{ repo_path: string | null }>(
-      'SELECT repo_path FROM repos WHERE repo_id = $1', [repoId],
+    const repoRow = await pool.query<{
+      repo_path: string | null
+      repo_url: string | null
+      token: string | null
+      github_app_id: string | null
+      github_app_private_key: string | null
+      github_app_installation_id: string | null
+    }>(
+      'SELECT repo_path, repo_url, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1',
+      [repoId],
     )
-    const repoPath = repoPathRow.rows[0]?.repo_path ?? undefined
+    const repoMeta = repoRow.rows[0]
+    const repoPath = repoMeta?.repo_path ?? undefined
     if (!repoPath) {
       console.warn(`${logPrefix} No repo_path for ${repoId} — skipping index`)
       return
+    }
+
+    // Generate a fresh clone token — GitHub App installation tokens expire after 1 hour
+    const freshToken = await resolveCloneToken(
+      repoMeta?.github_app_id,
+      repoMeta?.github_app_private_key,
+      repoMeta?.github_app_installation_id,
+      repoMeta?.token,
+    )
+    if (freshToken && repoMeta?.repo_url) {
+      const freshUrl = buildAuthenticatedUrl(repoMeta.repo_url, freshToken)
+      await execAsync(`git -C "${repoPath}" remote set-url origin "${freshUrl}"`, { timeout: 10_000 }).catch(() => {})
     }
 
     // Check if an index exists
