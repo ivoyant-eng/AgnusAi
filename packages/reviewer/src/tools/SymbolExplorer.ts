@@ -29,6 +29,7 @@ export interface ToolStats {
  */
 export class SymbolExplorer {
   private readonly changedLines: Map<string, Set<number>>
+  private readonly newFileContents: Map<string, string>
 
   private _calls = 0
   private _cacheHits = 0
@@ -53,6 +54,23 @@ export class SymbolExplorer {
         }
       }
       this.changedLines.set(file.path.replace(/^\//, ''), added)
+    }
+    // Build index of new files (all additions, not on disk) from diff hunks
+    this.newFileContents = new Map()
+    for (const file of diff.files) {
+      const allLines = file.hunks.flatMap(h => h.content.split('\n'))
+      const totalLines = allLines.length
+      const addedLines = allLines.filter(l => l.startsWith('+')).length
+      if (totalLines > 0 && addedLines === totalLines - file.hunks.length) {
+        // File is entirely new — reconstruct content from diff
+        const lines: string[] = []
+        for (const hunk of file.hunks) {
+          for (const line of hunk.content.split('\n')) {
+            if (line.startsWith('+')) lines.push(line.slice(1))
+          }
+        }
+        this.newFileContents.set(file.path.replace(/^\//, ''), lines.join('\n'))
+      }
     }
   }
 
@@ -198,12 +216,19 @@ export class SymbolExplorer {
   private async readFile(filePath: string, startLine?: number, endLine?: number): Promise<string> {
     if (!filePath) return 'Error: file_path is required.'
 
-    const absPath = path.join(this.repoPath, filePath.replace(/^\//, ''))
+    const normalizedPath = filePath.replace(/^\//, '')
     let content: string
-    try {
-      content = await fs.readFile(absPath, 'utf-8')
-    } catch {
-      return `Could not read file: ${filePath}. Check that the path matches a file in the diff.`
+
+    // New files only exist in the diff, not on disk — serve from diff reconstruction
+    if (this.newFileContents.has(normalizedPath)) {
+      content = this.newFileContents.get(normalizedPath)!
+    } else {
+      const absPath = path.join(this.repoPath, normalizedPath)
+      try {
+        content = await fs.readFile(absPath, 'utf-8')
+      } catch {
+        return `Could not read file: ${filePath}. This file may be new (added in this PR) or the path may not match the repo. The diff already contains the full content for new files.`
+      }
     }
 
     const allLines = content.split('\n')
@@ -213,7 +238,7 @@ export class SymbolExplorer {
     const slice = allLines.slice(start - 1, end)
     const truncated = end < total && !endLine
 
-    const changedSet = this.changedLines.get(filePath.replace(/^\//, '')) ?? new Set()
+    const changedSet = this.changedLines.get(normalizedPath) ?? new Set()
     const annotated = slice.map((line, i) => {
       const lineNo = start + i
       const marker = changedSet.has(lineNo) ? '★' : ' '
