@@ -31,6 +31,9 @@ services:
       - REVIEW_MODE=${REVIEW_MODE:-single}
       - AGENT_CONCURRENCY=${AGENT_CONCURRENCY:-2}
       - ENABLED_AGENTS=${ENABLED_AGENTS:-}
+      # Symbol explorer tools
+      - TOOL_DEBUG=${TOOL_DEBUG:-false}
+      - AGENT_TOOL_MAX_ROUNDS=${AGENT_TOOL_MAX_ROUNDS:-}
       - JUDGE_ENABLED=${JUDGE_ENABLED:-true}
       - JUDGE_MODE=${JUDGE_MODE:-llm}
       - SELF_REFLECTION_ENABLED=${SELF_REFLECTION_ENABLED:-false}
