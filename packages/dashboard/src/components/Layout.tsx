@@ -1,10 +1,13 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { APP_SHORT } from '@/config/app'
 
 const NAV_ITEMS = [
   { href: '/app', label: 'dashboard' },
   { href: '/app/connect', label: 'connect' },
+  { href: '/app/rules', label: 'rules' },
   { href: '/app/settings', label: 'settings' },
 ]
 
@@ -18,6 +21,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
     await mutate(null)
     navigate('/login')
+  }
+
+  async function handleSwitchOrg(orgId: string) {
+    await fetch('/api/auth/switch-org', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ orgId }),
+    })
+    await mutate()
   }
 
   return (
@@ -64,7 +77,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 background: 'var(--syn-str)',
               }}
             />
-            <span style={{ fontWeight: 700 }}>~/agnus-ai</span>
+            <span style={{ fontWeight: 700 }}>~/{APP_SHORT.toLowerCase()}</span>
             <span
               className="animate-blink"
               style={{
@@ -99,6 +112,32 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
             {user && (
               <>
+                {user.orgs && user.orgs.length > 1 && (
+                  <div style={{ width: '190px' }}>
+                    <Select value={user.activeOrgId ?? ''} onValueChange={handleSwitchOrg}>
+                      <SelectTrigger
+                        className="lp-mono"
+                        style={{
+                          background: 'transparent',
+                          border: '1px solid var(--lp-hdr-border)',
+                          color: 'var(--lp-hdr-fg)',
+                          fontSize: '0.62rem',
+                          height: '28px',
+                          minHeight: '28px',
+                        }}
+                      >
+                        <SelectValue placeholder="Select org" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {user.orgs.map(org => (
+                          <SelectItem key={org.orgId} value={org.orgId}>
+                            {org.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
                 <span
                   className="lp-mono"
                   style={{

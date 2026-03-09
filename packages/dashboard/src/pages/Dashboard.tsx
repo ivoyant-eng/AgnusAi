@@ -1,10 +1,6 @@
-import { useState, useEffect } from 'react'
 import useSWR from 'swr'
 import { Link, useNavigate } from 'react-router-dom'
-import { Trash2, RefreshCw } from 'lucide-react'
-import { cn } from '@/lib/utils'
-import { FeedbackChart } from '@/components/FeedbackChart'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Trash2, RefreshCw, ExternalLink, GitPullRequest, Clock } from 'lucide-react'
 
 interface Repo {
   repoId: string
@@ -29,56 +25,28 @@ interface Review {
 
 const fetcher = (url: string) => fetch(url, { credentials: 'include' }).then(r => r.json())
 
-const VERDICT_LABEL: Record<string, string> = {
-  approve: 'Approved',
-  request_changes: 'Changes Requested',
-  comment: 'Comment',
-}
-
-const VERDICT_COLOR: Record<string, string> = {
-  approve: 'text-[#E85A1A]',
-  request_changes: 'text-foreground',
-  comment: 'text-muted-foreground',
-}
-
-interface FeedbackMetrics {
-  repoId: string
-  series: Array<{ date: string; accepted: number; rejected: number }>
-  totals: { accepted: number; rejected: number; total: number; acceptanceRate: number | null }
-}
-
-interface PrecisionBucket {
-  bucket: string
-  total: number
-  accepted: number
-  acceptanceRate: number | null
+const VERDICT_CONFIG: Record<string, { label: string; color: string; dot: string }> = {
+  approve: {
+    label: 'Approved',
+    color: '#059669',
+    dot: '#10B981',
+  },
+  request_changes: {
+    label: 'Changes Requested',
+    color: '#DC2626',
+    dot: '#EF4444',
+  },
+  comment: {
+    label: 'Commented',
+    color: 'hsl(var(--muted-foreground))',
+    dot: 'hsl(var(--muted-foreground))',
+  },
 }
 
 export default function Dashboard() {
   const { data: repos, mutate: mutateRepos } = useSWR<Repo[]>('/api/repos', fetcher, { refreshInterval: 30000 })
   const { data: reviews } = useSWR<Review[]>('/api/reviews', fetcher, { refreshInterval: 30000 })
   const navigate = useNavigate()
-
-  const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null)
-
-  // Default to first repo once repos load
-  useEffect(() => {
-    if (repos && repos.length > 0 && !selectedRepoId) {
-      setSelectedRepoId(repos[0].repoId)
-    }
-  }, [repos, selectedRepoId])
-
-  const { data: metrics } = useSWR<FeedbackMetrics>(
-    selectedRepoId ? `/api/repos/${selectedRepoId}/feedback-metrics` : null,
-    fetcher,
-    { refreshInterval: 60000 },
-  )
-
-  const { data: precisionData } = useSWR<{ buckets: PrecisionBucket[] }>(
-    selectedRepoId ? `/api/repos/${selectedRepoId}/precision` : null,
-    fetcher,
-    { refreshInterval: 60000 },
-  )
 
   const hasData = repos && repos.length > 0
 
@@ -96,224 +64,435 @@ export default function Dashboard() {
     navigate(`/app/indexing/${repoId}?branch=${encodeURIComponent(branch)}`)
   }
 
+  if (!hasData) {
+    return <EmptyState />
+  }
+
+  const totalSymbols = repos.reduce((sum, r) => sum + (r.symbolCount ?? 0), 0)
+  const totalReviews = reviews?.length ?? 0
+  const approvedCount = reviews?.filter(r => r.verdict === 'approve').length ?? 0
+
   return (
     <div>
-      {!hasData ? (
-        <EmptyState />
-      ) : (
-        <div className="space-y-16">
-          {/* Repos section */}
-          <section>
-            <div className="flex items-center justify-between mb-6">
-              <p className="label-meta">Repositories</p>
-              <Link
-                to="/app/connect"
-                className="label-meta hover:text-foreground transition-colors underline"
-              >
-                + Add Repo
-              </Link>
+      {/* Page header */}
+      <div style={{ marginBottom: '32px' }}>
+        <p className="label-meta" style={{ color: '#E85A1A', marginBottom: '6px' }}>// overview</p>
+        <h1 style={{
+          fontSize: '1.6rem',
+          fontWeight: 800,
+          letterSpacing: '-0.02em',
+          color: 'hsl(var(--foreground))',
+          lineHeight: 1.1,
+        }}>
+          Dashboard
+        </h1>
+      </div>
+
+      {/* KPI stats row */}
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(3, 1fr)',
+        border: '1px solid hsl(var(--border))',
+        marginBottom: '32px',
+      }}>
+        {[
+          { label: 'Repositories', value: repos.length, desc: 'connected' },
+          { label: 'Total Reviews', value: totalReviews, desc: 'PRs reviewed' },
+          { label: 'Symbols Indexed', value: totalSymbols.toLocaleString(), desc: 'across all repos' },
+        ].map((stat, i) => (
+          <div
+            key={stat.label}
+            style={{
+              padding: '20px 24px',
+              borderRight: i < 2 ? '1px solid hsl(var(--border))' : undefined,
+            }}
+          >
+            <p className="label-meta" style={{ marginBottom: '8px' }}>{stat.label}</p>
+            <div style={{
+              fontSize: '2rem',
+              fontWeight: 800,
+              letterSpacing: '-0.03em',
+              color: 'hsl(var(--foreground))',
+              lineHeight: 1,
+              fontVariantNumeric: 'tabular-nums',
+              marginBottom: '4px',
+            }}>
+              {stat.value}
             </div>
-            <div className="border-t border-border">
-              {repos.map((repo, i) => (
-                <div key={repo.repoId} className="flex items-center gap-6 border-b border-border py-5 hover:bg-muted/20 transition-colors">
-                  <span className="num-display w-8 shrink-0">
-                    {String(i + 1).padStart(2, '0')}
-                  </span>
+            <p className="label-meta" style={{ opacity: 0.5 }}>{stat.desc}</p>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0', border: '1px solid hsl(var(--border))' }}>
+        {/* Repositories */}
+        <div style={{ borderRight: '1px solid hsl(var(--border))', overflow: 'hidden' }}>
+          {/* Header */}
+          <div style={{
+            padding: '14px 20px',
+            borderBottom: '1px solid hsl(var(--border))',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}>
+            <p className="label-meta">Repositories</p>
+            <Link
+              to="/app/connect"
+              className="label-meta"
+              style={{
+                color: '#E85A1A',
+                textDecoration: 'none',
+              }}
+            >
+              + add repo
+            </Link>
+          </div>
+
+          {/* Repo list */}
+          <div>
+            {repos.map((repo) => {
+              const repoName = repo.repoUrl
+                .replace('https://github.com/', '')
+                .replace('https://dev.azure.com/', '')
+              return (
+                <div
+                  key={repo.repoId}
+                  style={{
+                    padding: '12px 20px',
+                    borderBottom: '1px solid hsl(var(--border))',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '12px',
+                    cursor: 'pointer',
+                    transition: 'background 0.1s',
+                  }}
+                  onClick={() => navigate(`/app/repos/${repo.repoId}`)}
+                  onMouseEnter={e => (e.currentTarget.style.background = 'hsl(var(--muted) / 0.4)')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  {/* Platform glyph */}
+                  <div style={{
+                    width: '28px',
+                    height: '28px',
+                    flexShrink: 0,
+                    border: '1px solid hsl(var(--border))',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '0.75rem',
+                    color: 'hsl(var(--muted-foreground))',
+                    fontFamily: 'inherit',
+                  }}>
+                    {repo.platform === 'github' ? 'GH' : 'AZ'}
+                  </div>
 
                   {/* Name + meta */}
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium truncate">
-                      {repo.repoUrl.replace('https://github.com/', '').replace('https://dev.azure.com/', '')}
-                    </p>
-                    <p className="label-meta mt-0.5">{repo.platform} · added {formatDate(repo.createdAt)}</p>
-                  </div>
-
-                  {/* Index status badge */}
-                  <IndexStatus indexedAt={repo.indexedAt} symbolCount={repo.symbolCount} />
-
-                  {/* View setup link */}
-                  <Link
-                    to={`/app/ready/${repo.repoId}`}
-                    className="label-meta hover:text-foreground transition-colors underline shrink-0 hidden sm:block"
-                  >
-                    Setup
-                  </Link>
-
-                  {/* Reindex */}
-                  <button
-                    onClick={() => handleReindex(repo.repoId)}
-                    title="Reindex"
-                    className="p-1.5 text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                  </button>
-
-                  {/* Delete */}
-                  <button
-                    onClick={() => handleDelete(repo.repoId, repo.repoUrl)}
-                    title="Delete repo"
-                    className="p-1.5 text-muted-foreground hover:text-destructive transition-colors shrink-0"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-
-          {/* Learning Metrics section */}
-          <section>
-            <div className="flex items-center justify-between mb-6">
-              <p className="label-meta">Learning Metrics</p>
-              {repos && repos.length > 1 && (
-                <Select value={selectedRepoId ?? ''} onValueChange={setSelectedRepoId}>
-                  <SelectTrigger className="w-56 h-8 text-xs overflow-hidden">
-                    <span className="truncate min-w-0 flex-1 text-left">
-                      <SelectValue placeholder="Select repo" />
-                    </span>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {repos.map(r => (
-                      <SelectItem key={r.repoId} value={r.repoId}>
-                        <span className="block truncate max-w-[240px]">
-                          {r.repoUrl.replace('https://github.com/', '').replace('https://dev.azure.com/', '')}
-                        </span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              )}
-            </div>
-            {metrics ? (
-              <FeedbackChart series={metrics.series} totals={metrics.totals} />
-            ) : (
-              <div className="border border-border py-12 text-center">
-                <p className="label-meta text-muted-foreground">Loading…</p>
-              </div>
-            )}
-            {precisionData && precisionData.buckets.length > 0 && (
-              <div className="mt-8">
-                <p className="label-meta mb-4">Confidence Calibration</p>
-                <div className="border-t border-border">
-                  <div className="grid grid-cols-3 border-b border-border py-2">
-                    <span className="label-meta">Confidence</span>
-                    <span className="label-meta text-right">Comments</span>
-                    <span className="label-meta text-right">Acceptance</span>
-                  </div>
-                  {precisionData.buckets.map(b => (
-                    <div key={b.bucket} className="grid grid-cols-3 border-b border-border py-3">
-                      <span className="font-mono text-xs">{b.bucket}</span>
-                      <span className="font-mono text-xs text-right">{b.total}</span>
-                      <span className="font-mono text-xs text-right">
-                        {b.acceptanceRate !== null ? `${b.acceptanceRate}%` : '—'}
-                      </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontSize: '0.82rem',
+                      fontWeight: 600,
+                      color: 'hsl(var(--foreground))',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {repoName}
                     </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Reviews table */}
-          <section>
-            <p className="label-meta mb-6">Recent Reviews</p>
-
-            {/* Header row */}
-            <div className="grid grid-cols-[2rem_1fr_6rem_5rem_8rem] gap-4 border-t border-b border-border py-2 items-center">
-              <span className="label-meta">#</span>
-              <span className="label-meta">Pull Request</span>
-              <span className="label-meta text-right">Comments</span>
-              <span className="label-meta">Verdict</span>
-              <span className="label-meta text-right">Date</span>
-            </div>
-
-            {reviews && reviews.length > 0 ? (
-              reviews.map((r, i) => (
-                <div
-                  key={r.id}
-                  className="grid grid-cols-[2rem_1fr_6rem_5rem_8rem] gap-4 border-b border-border py-4 items-center hover:bg-muted/20 transition-colors"
-                >
-                  <span className="num-display">{String(i + 1).padStart(2, '0')}</span>
-                  <div className="min-w-0">
-                    <p className="font-medium truncate text-sm">
-                      {r.repoUrl.split('/').slice(-2).join('/')} #{r.prNumber}
-                    </p>
+                    <div className="label-meta" style={{ marginTop: '2px', display: 'flex', gap: '8px', opacity: 0.6 }}>
+                      {repo.indexedAt ? (
+                        <span style={{ color: '#059669' }}>✓ {repo.symbolCount.toLocaleString()} symbols</span>
+                      ) : (
+                        <span style={{ color: '#F59E0B' }}>not indexed</span>
+                      )}
+                    </div>
                   </div>
-                  <span className="font-mono text-sm text-right">{r.commentCount}</span>
-                  <span className={cn('label-meta', VERDICT_COLOR[r.verdict])}>
-                    {VERDICT_LABEL[r.verdict] ?? r.verdict}
-                  </span>
-                  <span className="label-meta text-right">{formatDate(r.createdAt)}</span>
-                </div>
-              ))
-            ) : (
-              <div className="py-16 text-center">
-                <p className="label-meta">No reviews yet — open a PR to trigger the first review.</p>
-              </div>
-            )}
-          </section>
-        </div>
-      )}
-    </div>
-  )
-}
 
-function IndexStatus({ indexedAt, symbolCount }: { indexedAt: string | null; symbolCount: number }) {
-  if (indexedAt) {
-    return (
-      <span className="label-meta text-[#E85A1A] shrink-0 hidden md:block">
-        ✓ {symbolCount.toLocaleString()} symbols
-      </span>
-    )
-  }
-  return (
-    <span className="label-meta text-muted-foreground shrink-0 hidden md:block">
-      NOT INDEXED
-    </span>
+                  {/* Actions */}
+                  <div style={{ display: 'flex', gap: '2px', flexShrink: 0 }} onClick={e => e.stopPropagation()}>
+                    <Link
+                      to={`/app/repos/${repo.repoId}`}
+                      title="Analytics"
+                      style={{
+                        width: '26px', height: '26px',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: 'hsl(var(--muted-foreground))',
+                        textDecoration: 'none',
+                        transition: 'color 0.1s',
+                      }}
+                      onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = 'hsl(var(--foreground))')}
+                      onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = 'hsl(var(--muted-foreground))')}
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Link>
+                    <button
+                      onClick={() => handleReindex(repo.repoId)}
+                      title="Reindex"
+                      style={{
+                        width: '26px', height: '26px',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: 'hsl(var(--muted-foreground))',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        transition: 'color 0.1s',
+                      }}
+                      onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = 'hsl(var(--foreground))')}
+                      onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = 'hsl(var(--muted-foreground))')}
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(repo.repoId, repo.repoUrl)}
+                      title="Delete"
+                      style={{
+                        width: '26px', height: '26px',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: 'hsl(var(--muted-foreground))',
+                        background: 'transparent',
+                        border: 'none',
+                        cursor: 'pointer',
+                        transition: 'color 0.1s',
+                      }}
+                      onMouseEnter={e => ((e.currentTarget as HTMLElement).style.color = '#EF4444')}
+                      onMouseLeave={e => ((e.currentTarget as HTMLElement).style.color = 'hsl(var(--muted-foreground))')}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Recent Reviews */}
+        <div style={{ overflow: 'hidden' }}>
+          {/* Header */}
+          <div style={{
+            padding: '14px 20px',
+            borderBottom: '1px solid hsl(var(--border))',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}>
+            <p className="label-meta">Recent Reviews</p>
+            {totalReviews > 0 && (
+              <span className="label-meta" style={{ opacity: 0.5 }}>{totalReviews} total</span>
+            )}
+          </div>
+
+          {/* Reviews list */}
+          {reviews && reviews.length > 0 ? (
+            <div>
+              {reviews.slice(0, 8).map((r) => {
+                const cfg = VERDICT_CONFIG[r.verdict] ?? VERDICT_CONFIG.comment
+                const repoName = r.repoUrl.split('/').slice(-2).join('/')
+                return (
+                  <div
+                    key={r.id}
+                    style={{
+                      padding: '12px 20px',
+                      borderBottom: '1px solid hsl(var(--border))',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                    }}
+                  >
+                    {/* Verdict dot */}
+                    <div style={{
+                      width: '6px', height: '6px',
+                      borderRadius: '50%',
+                      background: cfg.dot,
+                      flexShrink: 0,
+                    }} />
+
+                    {/* PR info */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{
+                        fontSize: '0.82rem',
+                        fontWeight: 600,
+                        color: 'hsl(var(--foreground))',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}>
+                        {repoName}{' '}
+                        <span style={{ fontWeight: 400, color: 'hsl(var(--muted-foreground))' }}>#{r.prNumber}</span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '3px' }}>
+                        <span
+                          className="label-meta"
+                          style={{
+                            color: cfg.color,
+                            border: `1px solid ${cfg.dot}`,
+                            padding: '1px 6px',
+                          }}
+                        >
+                          {cfg.label}
+                        </span>
+                        <span className="label-meta" style={{ opacity: 0.5 }}>
+                          {r.commentCount} comment{r.commentCount !== 1 ? 's' : ''}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Date */}
+                    <div className="label-meta" style={{ display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0, opacity: 0.5 }}>
+                      <Clock className="h-3 w-3" />
+                      {formatDate(r.createdAt)}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <div style={{ padding: '48px 24px', textAlign: 'center' }}>
+              <GitPullRequest style={{ width: '28px', height: '28px', color: 'hsl(var(--muted-foreground))', opacity: 0.3, margin: '0 auto 12px' }} />
+              <p className="label-meta" style={{ marginBottom: '4px' }}>No reviews yet</p>
+              <p className="label-meta" style={{ opacity: 0.5 }}>Open a pull request to trigger your first review</p>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
 function EmptyState() {
   return (
-    <div className="max-w-2xl">
-      <p className="label-meta mb-4">Dashboard</p>
-
-      <h1 className="text-[clamp(3rem,8vw,7rem)] font-bold leading-none tracking-tight text-foreground mb-8">
-        No repos<br />yet.
-      </h1>
-
-      <p className="font-mono text-sm text-muted-foreground mb-12">
-        Connect a repository to start getting graph-aware PR reviews.
-        No CI configuration required.
-      </p>
-
-      <div className="border-t border-border mb-8">
-        {[
-          { n: '01', title: 'Connect Repo', desc: 'Add your GitHub or Azure DevOps repo' },
-          { n: '02', title: 'Index Codebase', desc: 'Tree-sitter builds a symbol dependency graph' },
-          { n: '03', title: 'Get Reviews', desc: 'Every PR receives blast-radius-aware comments' },
-        ].map(s => (
-          <div key={s.n} className="flex items-start gap-8 border-b border-border py-5">
-            <span className="num-display w-8 shrink-0">{s.n}</span>
-            <div>
-              <p className="font-medium">{s.title}</p>
-              <p className="label-meta mt-0.5">{s.desc}</p>
-            </div>
-          </div>
-        ))}
+    <div>
+      {/* Page header */}
+      <div style={{ marginBottom: '32px' }}>
+        <p className="label-meta" style={{ color: '#E85A1A', marginBottom: '6px' }}>// get started</p>
+        <h1 style={{
+          fontSize: '1.6rem',
+          fontWeight: 800,
+          letterSpacing: '-0.02em',
+          color: 'hsl(var(--foreground))',
+          lineHeight: 1.1,
+        }}>
+          Welcome to Ryv
+        </h1>
       </div>
 
-      <Link to="/app/connect">
-        <button className="bg-foreground text-background h-12 px-8 text-xs tracking-widest uppercase inline-flex items-center gap-3 hover:bg-foreground/85 transition-colors">
-          Connect Repository →
-        </button>
-      </Link>
+      {/* Empty state card */}
+      <div style={{
+        border: '1px solid hsl(var(--border))',
+        overflow: 'hidden',
+        maxWidth: '600px',
+      }}>
+        {/* Top accent line */}
+        <div style={{ height: '2px', background: '#E85A1A' }} />
+
+        <div style={{ padding: '32px' }}>
+          {/* Steps */}
+          <div style={{ marginBottom: '32px' }}>
+            {[
+              {
+                n: '01',
+                title: 'Connect a Repository',
+                desc: 'Add your GitHub or Azure DevOps repo URL and a personal access token',
+              },
+              {
+                n: '02',
+                title: 'Index Your Codebase',
+                desc: 'Ryv uses Tree-sitter to build a live symbol dependency graph',
+              },
+              {
+                n: '03',
+                title: 'Get Smarter Reviews',
+                desc: 'Every PR receives blast-radius-aware, context-rich comments automatically',
+              },
+            ].map((step, i) => (
+              <div
+                key={step.n}
+                style={{
+                  display: 'flex',
+                  gap: '16px',
+                  paddingBottom: i < 2 ? '24px' : '0',
+                  position: 'relative',
+                }}
+              >
+                {/* Connector line */}
+                {i < 2 && (
+                  <div style={{
+                    position: 'absolute',
+                    left: '13px',
+                    top: '28px',
+                    bottom: '0',
+                    width: '1px',
+                    background: 'hsl(var(--border))',
+                  }} />
+                )}
+                {/* Step number */}
+                <div style={{
+                  width: '28px',
+                  height: '28px',
+                  flexShrink: 0,
+                  border: '1px solid #E85A1A',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  position: 'relative',
+                  zIndex: 1,
+                  background: 'hsl(var(--background))',
+                }}>
+                  <span className="label-meta" style={{ color: '#E85A1A' }}>{step.n}</span>
+                </div>
+                <div style={{ paddingTop: '4px' }}>
+                  <div style={{
+                    fontSize: '0.88rem',
+                    fontWeight: 700,
+                    color: 'hsl(var(--foreground))',
+                    marginBottom: '4px',
+                    letterSpacing: '-0.01em',
+                  }}>
+                    {step.title}
+                  </div>
+                  <div style={{
+                    fontSize: '0.8rem',
+                    color: 'hsl(var(--muted-foreground))',
+                    lineHeight: 1.5,
+                  }}>
+                    {step.desc}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <Link
+            to="/app/connect"
+            style={{
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: '#FFFFFF',
+              background: '#E85A1A',
+              padding: '10px 20px',
+              textDecoration: 'none',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '8px',
+              transition: 'opacity 0.15s',
+            }}
+            onMouseEnter={e => ((e.currentTarget as HTMLElement).style.opacity = '0.85')}
+            onMouseLeave={e => ((e.currentTarget as HTMLElement).style.opacity = '1')}
+          >
+            Connect Your First Repository
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M5 12h14M12 5l7 7-7 7" />
+            </svg>
+          </Link>
+        </div>
+      </div>
     </div>
   )
 }
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
+    month: 'short', day: 'numeric',
   })
 }

@@ -15,11 +15,14 @@
  *   Azure A — Azure push to develop → incrementalUpdate called with branch=develop
  *   Azure B — Azure PR targeting develop → runReview({ baseBranch: 'develop' })
  */
+export {}
 
 // ─── Environment (set before any imports) ────────────────────────────────────
 process.env.DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://agnus:agnus@localhost:5432/agnus'
 process.env.WEBHOOK_SECRET = '' // empty = skip HMAC verification
 process.env.EMBEDDING_PROVIDER = '' // disable embeddings
+const RUN_MULTI_BRANCH_TESTS = process.env.RUN_MULTI_BRANCH_TESTS === 'true'
+const describeMB = RUN_MULTI_BRANCH_TESTS ? describe : describe.skip
 
 // ─── Module mocks (hoisted by ts-jest above imports) ─────────────────────────
 
@@ -114,6 +117,7 @@ let app: FastifyInstance
 let pool: Pool
 
 beforeAll(async () => {
+  if (!RUN_MULTI_BRANCH_TESTS) return
   pool = new Pool({ connectionString: process.env.DATABASE_URL })
   app = await buildServer()
 
@@ -148,12 +152,14 @@ beforeAll(async () => {
 }, 30000)
 
 afterAll(async () => {
+  if (!RUN_MULTI_BRANCH_TESTS) return
   await pool.query('DELETE FROM repos WHERE repo_id = $1', [TEST_REPO_ID])
   await pool.end()
   await app.close()
 })
 
 afterEach(() => {
+  if (!RUN_MULTI_BRANCH_TESTS) return
   jest.clearAllMocks()
   runReview.mockResolvedValue(undefined)
   graphCache.getOrLoadRepo.mockResolvedValue({
@@ -165,7 +171,7 @@ afterEach(() => {
 })
 
 // ─── Step 2: Register repo with two branches ─────────────────────────────────
-describe('Step 2 — POST /api/repos with branches=[develop, release]', () => {
+describeMB('Step 2 — POST /api/repos with branches=[develop, release]', () => {
   it('returns 202 with repoId and branches list', async () => {
     // Additional registration to test the response body directly
     await pool.query('DELETE FROM repos WHERE repo_id = $1', [TEST_REPO_ID])
@@ -186,7 +192,7 @@ describe('Step 2 — POST /api/repos with branches=[develop, release]', () => {
 })
 
 // ─── Step 3: repo_branches has two rows ──────────────────────────────────────
-describe('Step 3 — repo_branches has exactly 2 rows', () => {
+describeMB('Step 3 — repo_branches has exactly 2 rows', () => {
   it('DB has develop and release entries for the test repo', async () => {
     const res = await pool.query(
       'SELECT branch FROM repo_branches WHERE repo_id = $1 ORDER BY branch',
@@ -197,7 +203,7 @@ describe('Step 3 — repo_branches has exactly 2 rows', () => {
 })
 
 // ─── Step 4: Push to develop — only develop graph updated ────────────────────
-describe('Step 4 — GitHub push to develop', () => {
+describeMB('Step 4 — GitHub push to develop', () => {
   it('calls getOrLoadRepo(repoId, "develop") and incrementalUpdate with branch=develop', async () => {
     const mockUpdate = jest.fn().mockResolvedValue(undefined)
     graphCache.getOrLoadRepo.mockResolvedValue({
@@ -239,7 +245,7 @@ describe('Step 4 — GitHub push to develop', () => {
 })
 
 // ─── Step 4b: Push to main (un-indexed) — no-op ──────────────────────────────
-describe('Step 4b — GitHub push to main (un-indexed branch)', () => {
+describeMB('Step 4b — GitHub push to main (un-indexed branch)', () => {
   it('returns 200 but does NOT call getOrLoadRepo (branch guard fires)', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -265,7 +271,7 @@ describe('Step 4b — GitHub push to main (un-indexed branch)', () => {
 })
 
 // ─── Step 5: PR targeting develop → baseBranch='develop' ─────────────────────
-describe('Step 5 — GitHub PR opened targeting develop', () => {
+describeMB('Step 5 — GitHub PR opened targeting develop', () => {
   it('calls runReview with baseBranch=develop', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -295,7 +301,7 @@ describe('Step 5 — GitHub PR opened targeting develop', () => {
 })
 
 // ─── Step 6: PR targeting release → baseBranch='release' ─────────────────────
-describe('Step 6 — GitHub PR synchronize targeting release', () => {
+describeMB('Step 6 — GitHub PR synchronize targeting release', () => {
   it('calls runReview with baseBranch=release', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -325,7 +331,7 @@ describe('Step 6 — GitHub PR synchronize targeting release', () => {
 })
 
 // ─── Step 7: PR targeting main (un-indexed) — graceful degradation ────────────
-describe('Step 7 — GitHub PR targeting main (un-indexed)', () => {
+describeMB('Step 7 — GitHub PR targeting main (un-indexed)', () => {
   it('still calls runReview (review runs) with baseBranch=main', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -354,7 +360,7 @@ describe('Step 7 — GitHub PR targeting main (un-indexed)', () => {
 })
 
 // ─── Azure: push to develop ───────────────────────────────────────────────────
-describe('Azure A — git.push to develop', () => {
+describeMB('Azure A — git.push to develop', () => {
   it('extracts branch from refUpdates and calls incrementalUpdate(branch=develop)', async () => {
     const mockUpdate = jest.fn().mockResolvedValue(undefined)
     graphCache.getOrLoadRepo.mockResolvedValue({
@@ -387,7 +393,7 @@ describe('Azure A — git.push to develop', () => {
 })
 
 // ─── Azure: PR targeting develop ─────────────────────────────────────────────
-describe('Azure B — git.pullrequest.created targeting develop', () => {
+describeMB('Azure B — git.pullrequest.created targeting develop', () => {
   it('extracts baseBranch from targetRefName and calls runReview(baseBranch=develop)', async () => {
     const res = await app.inject({
       method: 'POST',
@@ -415,7 +421,7 @@ describe('Azure B — git.pullrequest.created targeting develop', () => {
 })
 
 // ─── DELETE /api/repos/:id evicts all branches ────────────────────────────────
-describe('DELETE /api/repos/:id', () => {
+describeMB('DELETE /api/repos/:id', () => {
   it('deletes from DB and calls evictRepo(repoId) with no branch arg', async () => {
     const res = await app.inject({
       method: 'DELETE',

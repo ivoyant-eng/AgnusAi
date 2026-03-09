@@ -1,6 +1,6 @@
 # Architecture Overview
 
-AgnusAI v2 is a pnpm monorepo with five packages built in strict dependency order.
+Ryv v2 is a pnpm monorepo with five packages built in strict dependency order.
 
 ## Package Map
 

@@ -1,6 +1,6 @@
 // Shared response parser — provider-agnostic
 
-import { ReviewResult, ReviewComment } from '../types';
+import { ReviewResult, ReviewComment, PRDescriptionResult, PRChangeType } from '../types';
 
 export function parseReviewResponse(response: string): ReviewResult {
   // Summary ends at first file marker OR VERDICT — supports both [File: and bare File: formats
@@ -50,7 +50,7 @@ export function parseCommentBlocks(response: string): ReviewComment[] {
       continue
     }
     markers.push({
-      path: m[1].trim(),
+      path: m[1].trim().replace(/^`+|`+$/g, ''),
       line: lineNum,
       markerStart: m.index,
       contentStart: m.index + m[0].length,
@@ -71,12 +71,17 @@ export function parseCommentBlocks(response: string): ReviewComment[] {
     // Remove confidence marker from body
     const cleanBody = body.replace(/\[Confidence:\s*[\d.]+\]\s*/i, '').trim()
 
+    // Extract suggestion block (```suggestion ... ```) from body
+    const suggestionMatch = cleanBody.match(/```suggestion\s*\n([\s\S]*?)\n```/i)
+    const suggestion = suggestionMatch ? suggestionMatch[1] : undefined
+
     comments.push({
       path: markers[i].path,
       line: markers[i].line,
       body: cleanBody,
       severity: detectSeverity(body),
       confidence: confidence,
+      suggestion,
     })
   }
 
@@ -95,4 +100,37 @@ export function labelToLevel(label: string): 'info' | 'warning' | 'error' {
     case 'major':    return 'warning';
     default:         return 'info';
   }
+}
+
+export function parsePRDescriptionResponse(response: string): PRDescriptionResult {
+  const titleMatch = response.match(/TITLE:\s*(.+)/i);
+  const changeTypeMatch = response.match(/CHANGE_TYPE:\s*(.+)/i);
+  const labelsMatch = response.match(/LABELS:\s*(.+)/i);
+  const bodyMatch = response.match(/BODY:\s*([\s\S]*)$/i);
+
+  const fallbackTitle = 'Update pull request details';
+  const fallbackBody = response.trim();
+  const fallbackType: PRChangeType = 'chore';
+
+  const title = titleMatch?.[1]?.trim() || fallbackTitle;
+  const rawType = (changeTypeMatch?.[1] || '').trim().toLowerCase();
+  const allowedTypes: PRChangeType[] = ['bug', 'feature', 'refactor', 'docs', 'tests', 'chore'];
+  const changeType = allowedTypes.includes(rawType as PRChangeType)
+    ? (rawType as PRChangeType)
+    : fallbackType;
+
+  const labels = (labelsMatch?.[1] || '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean)
+    .slice(0, 6);
+
+  const body = bodyMatch?.[1]?.trim() || fallbackBody;
+
+  return {
+    title,
+    body,
+    changeType,
+    labels
+  };
 }

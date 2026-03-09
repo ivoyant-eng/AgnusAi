@@ -14,8 +14,21 @@ import {
   DiffHunk,
   DetailedReviewComment,
   PRComment,
-  ReviewCheckpoint
+  ReviewCheckpoint,
+  PRDescriptionResult
 } from '../../types';
+
+/**
+ * Azure DevOps does not render GitHub's ```suggestion``` fences as interactive
+ * suggested changes — it treats the unknown language tag as a plain code block.
+ * Replace each fence with a clearly-labelled fenced block so reviewers can
+ * still read and apply the suggestion manually.
+ */
+function convertSuggestionBlocks(body: string): string {
+  return body.replace(/```suggestion\r?\n([\s\S]*?)\n```/gi, (_, code) =>
+    `**Suggested change:**\n\`\`\`\n${code}\n\`\`\``
+  );
+}
 
 interface AzureDevOpsConfig {
   organization: string;
@@ -34,6 +47,20 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   private baseUrl: string;
   /** When set, getDiff compares latest iteration vs this iteration ID. 0 = full diff. */
   compareToIteration?: number;
+
+  /**
+   * Tracks the active PR id across checkpoint update/delete calls.
+   *
+   * Azure requires the PR id in every thread/comment URL, but the VCSAdapter interface's
+   * updateCheckpointComment and deleteCheckpointComment signatures omit it (matching GitHub's
+   * issue-comment model where comment IDs are globally unique). We capture it whenever a
+   * PR-scoped method is called so downstream checkpoint helpers have access.
+   *
+   * Note: for Azure, incremental review is handled via iteration-based DB state
+   * (pr_review_state table), not PR checkpoint comments. These methods are implemented
+   * for interface completeness but are not invoked by the Azure review flow.
+   */
+  private _activePrId: string | number | null = null;
 
   constructor(config: AzureDevOpsConfig) {
     this.organization = config.organization;
@@ -62,10 +89,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     };
   }
 
-  private getApiUrl(path: string): string {
-    return `${this.baseUrl}/${this.organization}/${this.project}/_apis${path}`;
-  }
-
+  
   private getGitApiUrl(path: string): string {
     return `${this.baseUrl}/${this.organization}/${this.project}/_apis/git${path}`;
   }
@@ -442,14 +466,8 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     path: string,
     line: number,
     body: string,
-    severity: 'info' | 'warning' | 'error' = 'info'
+    _severity: 'info' | 'warning' | 'error' = 'info'
   ): Promise<void> {
-    const severityEmoji = {
-      info: '💡',
-      warning: '⚠️',
-      error: '🚨'
-    };
-
     // Azure DevOps requires filePath to start with /
     const filePath = path.startsWith('/') ? path : `/${path}`;
 
@@ -483,7 +501,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     const requestBody: any = {
       comments: [{
         parentCommentId: 0,
-        content: body,
+        content: convertSuggestionBlocks(body),
         commentType: 'text'
       }],
       status: 'active',
@@ -544,7 +562,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       body: JSON.stringify({
         comments: [{
           parentCommentId: 0,
-          content: `${verdictEmoji[review.verdict]} **Review Summary**\n\n${review.summary}\n\n**Verdict:** ${review.verdict}`,
+          content: review.summary,
           commentType: 'text'
         }],
         status: 'active'
@@ -631,7 +649,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     const response = await fetch(url, {
       method: 'PATCH',
       headers: this.getAuthHeaders(),
-      body: JSON.stringify({ content: newBody })
+      body: JSON.stringify({ content: convertSuggestionBlocks(newBody) })
     });
     if (!response.ok) {
       console.error(`[azure-adapter] Failed to update thread ${threadId} comment ${commentId}: ${response.statusText}`);
@@ -676,6 +694,101 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     return pr.author;
   }
 
+  async updatePRDescription(prId: string | number, description: PRDescriptionResult): Promise<void> {
+    const prUrl = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}?api-version=7.0`
+    );
+
+    const response = await fetch(prUrl, {
+      method: 'PATCH',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({
+        title: description.title,
+        description: description.body,
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to update PR description: ${response.statusText}`);
+    }
+
+    const desiredLabels = new Set<string>([
+      `type:${description.changeType}`,
+      ...description.labels.map(l => l.trim()).filter(Boolean)
+    ]);
+
+    if (desiredLabels.size === 0) {
+      return;
+    }
+
+    const existingLabels = await this.getPRLabels(prId);
+    for (const label of desiredLabels) {
+      if (existingLabels.has(label.toLowerCase())) continue;
+      await this.addPRLabel(prId, label);
+    }
+  }
+
+  private async getPRLabels(prId: string | number): Promise<Set<string>> {
+    const versions = ['7.1', '7.1-preview.1'];
+    for (const version of versions) {
+      const url = this.getGitApiUrl(
+        `/repositories/${this.repository}/pullrequests/${prId}/labels?api-version=${version}`
+      );
+      const response = await fetch(url, { headers: this.getAuthHeaders() });
+      if (!response.ok) continue;
+
+      const data = await response.json() as { value?: Array<{ name?: string }> };
+      const labels = new Set<string>();
+      for (const entry of data.value || []) {
+        if (entry.name) labels.add(entry.name.toLowerCase());
+      }
+      return labels;
+    }
+    return new Set<string>();
+  }
+
+  private async addPRLabel(prId: string | number, label: string): Promise<void> {
+    const versions = ['7.1', '7.1-preview.1'];
+    let lastStatus = '';
+
+    for (const version of versions) {
+      const url = this.getGitApiUrl(
+        `/repositories/${this.repository}/pullrequests/${prId}/labels?api-version=${version}`
+      );
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({ name: label })
+      });
+
+      if (response.ok || response.status === 409) {
+        return;
+      }
+
+      lastStatus = response.statusText;
+    }
+
+    throw new Error(`Failed to add PR label "${label}": ${lastStatus || 'unknown error'}`);
+  }
+
+  /**
+   * Reply to an existing PR thread by posting a new comment in it.
+   */
+  async replyToThread(prId: string | number, threadId: number, body: string): Promise<void> {
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments?api-version=7.0`,
+    );
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ content: body, commentType: 1 }),
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to reply to thread ${threadId}: ${response.statusText}`);
+    }
+  }
+
   async getFileContent(path: string, ref?: string): Promise<string> {
     const branch = ref || 'main';
     const url = this.getGitApiUrl(
@@ -698,10 +811,21 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   // ============================================
 
   /**
-   * Get all review comments (threads in Azure DevOps)
-   * Handles pagination to fetch ALL comments
+   * Get all review comments (threads) on a PR.
+   *
+   * Azure DevOps models review discussions as "threads" where each thread is anchored
+   * to a file+line position. AgnusAI creates one-comment threads (one finding per thread),
+   * so the thread ID is the natural stable identifier for a comment. We use thread.id
+   * directly as the DetailedReviewComment.id — this ensures updateReviewComment and
+   * deleteReviewComment can address the correct thread without NaN-producing composite math.
+   *
+   * Replies (parentCommentId > 0) within a thread are also surfaced so callers can see
+   * the full conversation, though AgnusAI only writes to / edits the first (root) comment.
+   *
+   * Handles pagination: fetches up to 1000 threads (well beyond normal PR sizes).
    */
   async getReviewComments(prId: string | number): Promise<DetailedReviewComment[]> {
+    this._activePrId = prId;
     const comments: DetailedReviewComment[] = [];
     let skip = 0;
     const top = 100;
@@ -732,27 +856,33 @@ export class AzureDevOpsAdapter implements VCSAdapter {
             lastUpdatedDate: string;
             parentCommentId?: number;
           }>;
+          isDeleted?: boolean;
           status: string;
         }>;
       };
 
       for (const thread of data.value || []) {
-        // Each thread can have multiple comments
+        if (thread.isDeleted) continue;
+
+        // Normalize file path: Azure stores paths with a leading "/", consumers expect without
+        const filePath = thread.threadContext?.filePath?.replace(/^\//, '') || '';
+        const line = thread.threadContext?.rightFileStart?.line || null;
+
         for (const comment of thread.comments || []) {
-          // Normalize file path (remove leading /)
-          const path = thread.threadContext?.filePath?.replace(/^\//, '') || '';
-          const line = thread.threadContext?.rightFileStart?.line || null;
-          
           comments.push({
-            id: Number(`${thread.id}-${comment.id}`), // Composite ID
+            // Use thread.id as the stable comment identifier. Azure threads are
+            // 1:1 with AgnusAI findings. We intentionally ignore the per-thread
+            // comment sequence number here to avoid the NaN issue with Number("x-y").
+            id: thread.id,
             body: comment.content || '',
             user: {
               login: comment.author.uniqueName,
               type: 'User'
             },
-            path,
+            path: filePath,
             line,
-            inReplyToId: comment.parentCommentId ? Number(`${thread.id}-${comment.parentCommentId}`) : null,
+            // Replies reference the root comment by parentCommentId; map back to thread id
+            inReplyToId: comment.parentCommentId ? thread.id : null,
             createdAt: comment.publishedDate,
             updatedAt: comment.lastUpdatedDate,
             htmlUrl: `${this.baseUrl}/${this.organization}/${this.project}/_git/${this.repository}/pullrequest/${prId}?discussionId=${thread.id}`
@@ -760,13 +890,11 @@ export class AzureDevOpsAdapter implements VCSAdapter {
         }
       }
 
-      // Check if there are more results
       hasMore = (data.value?.length || 0) === top;
       skip += top;
 
-      // Safety limit
       if (skip > 1000) {
-        console.warn('Reached maximum threads fetching comments');
+        console.warn('[azure-adapter] Reached 1000-thread safety limit while fetching comments');
         break;
       }
     }
@@ -775,64 +903,106 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   /**
-   * Get PR-level comments
+   * Get PR-level comments (threads with no file context).
+   *
+   * In Azure DevOps, PR-level comments (e.g. the summary, checkpoint comment) are threads
+   * that have no threadContext.filePath. We return thread.id as the PRComment.id so callers
+   * can pass it back to updateCheckpointComment / deleteCheckpointComment.
    */
   async getPRComments(prId: string | number): Promise<PRComment[]> {
-    // In Azure DevOps, these are threads without file context
-    const threads = await this.getReviewComments(prId);
-    return threads
-      .filter(t => !t.path) // No file context = PR-level comment
-      .map(t => ({
-        id: t.id,
-        body: t.body,
-        user: t.user,
-        createdAt: t.createdAt,
-        updatedAt: t.updatedAt
-      }));
+    this._activePrId = prId;
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads?api-version=7.0`
+    );
+    const response = await fetch(url, { headers: this.getAuthHeaders() });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch PR threads: ${response.statusText}`);
+    }
+    const data = await response.json() as {
+      value: Array<{
+        id: number;
+        threadContext?: { filePath?: string };
+        comments: Array<{
+          id: number;
+          content: string;
+          author: { displayName: string; uniqueName: string };
+          publishedDate: string;
+          lastUpdatedDate: string;
+        }>;
+        isDeleted?: boolean;
+      }>;
+    };
+
+    const prComments: PRComment[] = [];
+    for (const thread of data.value || []) {
+      if (thread.isDeleted) continue;
+      // PR-level threads have no file context
+      if (thread.threadContext?.filePath) continue;
+      const firstComment = thread.comments?.[0];
+      if (!firstComment) continue;
+      prComments.push({
+        id: thread.id,  // thread id is the stable identifier for checkpoint operations
+        body: firstComment.content || '',
+        user: {
+          login: firstComment.author.uniqueName,
+          type: 'User'
+        },
+        createdAt: firstComment.publishedDate,
+        updatedAt: firstComment.lastUpdatedDate,
+      });
+    }
+    return prComments;
   }
 
   /**
-   * Update a review comment
+   * Update a review comment.
+   *
+   * commentId is the thread id (as returned by getReviewComments). AgnusAI always writes
+   * its finding as the first comment in the thread (comment sequence id = 1), so we target
+   * that specific comment. The PATCH must include the comment sequence id in the URL —
+   * omitting it previously caused a 404 or silently patched nothing.
    */
   async updateReviewComment(
     prId: string | number,
     commentId: string | number,
     body: string
   ): Promise<void> {
-    // Parse composite ID (threadId-commentId)
-    const [threadIdStr, ,] = String(commentId).split('-');
-    const threadId = parseInt(threadIdStr, 10);
+    // commentId is the thread id. The root comment within that thread has sequence id 1.
+    const threadId = parseInt(String(commentId), 10);
+    const rootCommentId = 1; // AgnusAI's inline comments are always the first in their thread
 
     const url = this.getGitApiUrl(
-      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments?api-version=7.0`
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments/${rootCommentId}?api-version=7.0`
     );
 
     const response = await fetch(url, {
       method: 'PATCH',
       headers: this.getAuthHeaders(),
-      body: JSON.stringify({
-        content: body
-      })
+      body: JSON.stringify({ content: body })
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to update comment: ${response.statusText}`);
+      throw new Error(`Failed to update comment in thread ${threadId}: ${response.statusText}`);
     }
   }
 
   /**
-   * Delete a review comment
+   * Delete a review comment.
+   *
+   * commentId is the thread id. We delete comment sequence 1 (the root comment AgnusAI
+   * wrote). Azure DevOps prevents deletion of the only comment in a thread via the REST
+   * API, so we fall back to closing the thread (status = "closed") when DELETE returns 403.
+   * Closed threads are hidden from the PR UI by default.
    */
   async deleteReviewComment(
     prId: string | number,
     commentId: string | number
   ): Promise<void> {
-    const [threadIdStr, commentIdStr] = String(commentId).split('-');
-    const threadId = parseInt(threadIdStr, 10);
-    const cId = parseInt(commentIdStr, 10);
+    const threadId = parseInt(String(commentId), 10);
+    const rootCommentId = 1;
 
     const url = this.getGitApiUrl(
-      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments/${cId}?api-version=7.0`
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments/${rootCommentId}?api-version=7.0`
     );
 
     const response = await fetch(url, {
@@ -840,9 +1010,128 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       headers: this.getAuthHeaders()
     });
 
-    if (!response.ok) {
-      throw new Error(`Failed to delete comment: ${response.statusText}`);
+    if (response.ok || response.status === 204) return;
+
+    // Azure returns 403 when the comment is the sole comment in a thread (can't delete it).
+    // Closing the thread achieves the same visual effect in the PR UI.
+    if (response.status === 403 || response.status === 405) {
+      await this.closeThread(prId, threadId);
+      return;
     }
+
+    throw new Error(`Failed to delete comment in thread ${threadId}: ${response.statusText}`);
+  }
+
+  /**
+   * Close a thread (mark status = "closed").
+   * Used as a fallback when a single-comment thread cannot be deleted via the REST API.
+   */
+  private async closeThread(prId: string | number, threadId: number): Promise<void> {
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}?api-version=7.0`
+    );
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({ status: 'closed' })
+    });
+    if (!response.ok) {
+      console.error(`[azure-adapter] Failed to close thread ${threadId}: ${response.statusText}`);
+    }
+  }
+
+  /**
+   * Create a reply to an existing review comment thread.
+   *
+   * commentId is the thread id. Azure DevOps threads are the unit of conversation;
+   * a reply is a new comment within that thread with parentCommentId pointing to
+   * the root comment (sequence id 1).
+   */
+  async createReply(
+    prId: string | number,
+    commentId: string | number,
+    body: string
+  ): Promise<void> {
+    const threadId = parseInt(String(commentId), 10);
+
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments?api-version=7.0`
+    );
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({
+        parentCommentId: 1, // reply to the root comment
+        content: body,
+        commentType: 'text'
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to create reply in thread ${threadId}: ${response.statusText}`);
+    }
+  }
+
+  /**
+   * Get a single review comment by thread id.
+   *
+   * Returns the first (root) comment of the thread. commentId is the thread id,
+   * consistent with the id values returned by getReviewComments.
+   */
+  async getReviewComment(commentId: string | number): Promise<DetailedReviewComment> {
+    if (!this._activePrId) {
+      throw new Error('[azure-adapter] getReviewComment called before a PR-scoped method set _activePrId');
+    }
+    const threadId = parseInt(String(commentId), 10);
+    const prId = this._activePrId;
+
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}?api-version=7.0`
+    );
+
+    const response = await fetch(url, { headers: this.getAuthHeaders() });
+    if (!response.ok) {
+      throw new Error(`Failed to fetch thread ${threadId}: ${response.statusText}`);
+    }
+
+    const thread = await response.json() as {
+      id: number;
+      threadContext?: {
+        filePath?: string;
+        rightFileStart?: { line: number; offset: number };
+      };
+      comments: Array<{
+        id: number;
+        content: string;
+        author: { displayName: string; uniqueName: string };
+        publishedDate: string;
+        lastUpdatedDate: string;
+      }>;
+    };
+
+    const rootComment = thread.comments?.[0];
+    if (!rootComment) {
+      throw new Error(`Thread ${threadId} has no comments`);
+    }
+
+    const filePath = thread.threadContext?.filePath?.replace(/^\//, '') || '';
+    const line = thread.threadContext?.rightFileStart?.line || null;
+
+    return {
+      id: thread.id,
+      body: rootComment.content || '',
+      user: {
+        login: rootComment.author.uniqueName,
+        type: 'User'
+      },
+      path: filePath,
+      line,
+      inReplyToId: null,
+      createdAt: rootComment.publishedDate,
+      updatedAt: rootComment.lastUpdatedDate,
+      htmlUrl: `${this.baseUrl}/${this.organization}/${this.project}/_git/${this.repository}/pullrequest/${prId}?discussionId=${thread.id}`
+    };
   }
 
   // ============================================
@@ -850,33 +1139,46 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   // ============================================
 
   /**
-   * Find existing checkpoint comment
+   * Find an existing AgnusAI checkpoint comment.
+   *
+   * Checkpoint comments are PR-level threads (no file context) whose body contains the
+   * AGNUSAI_CHECKPOINT marker. The returned PRComment.id is the thread id — pass it back
+   * to updateCheckpointComment or deleteCheckpointComment.
+   *
+   * Note: Azure uses iteration-based incremental review (pr_review_state table), so this
+   * method is implemented for interface completeness but not called by the normal flow.
    */
   async findCheckpointComment(prId: string | number): Promise<PRComment | null> {
+    this._activePrId = prId;
     const comments = await this.getPRComments(prId);
-    
-    const checkpointComments = comments.filter(c => 
+
+    const checkpoints = comments.filter(c =>
       c.body.includes('AGNUSAI_CHECKPOINT') || c.body.includes('AgnusAI Review Checkpoint')
     );
-    
-    if (checkpointComments.length === 0) {
-      return null;
-    }
-    
-    return checkpointComments.sort((a, b) => 
+
+    if (checkpoints.length === 0) return null;
+
+    // Return the most recently created checkpoint (newest by creation date)
+    return checkpoints.sort((a, b) =>
       new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     )[0];
   }
 
   /**
-   * Create a checkpoint comment
+   * Create a checkpoint comment (PR-level thread).
+   *
+   * Returns the thread id as a string. Stores the prId in _activePrId so that
+   * updateCheckpointComment and deleteCheckpointComment can build the correct URL.
+   *
+   * Note: Azure uses iteration-based incremental review, so this is for completeness.
    */
   async createCheckpointComment(
     prId: string | number,
     checkpoint: ReviewCheckpoint
   ): Promise<string> {
+    this._activePrId = prId;
     const body = this.generateCheckpointBody(checkpoint);
-    
+
     const url = this.getGitApiUrl(
       `/repositories/${this.repository}/pullrequests/${prId}/threads?api-version=7.0`
     );
@@ -895,7 +1197,7 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to create checkpoint: ${response.statusText}`);
+      throw new Error(`Failed to create checkpoint thread: ${response.statusText}`);
     }
 
     const data = await response.json() as { id: number };
@@ -903,30 +1205,68 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   /**
-   * Update an existing checkpoint comment
+   * Update an existing checkpoint comment.
+   *
+   * commentId is the thread id (returned by createCheckpointComment / findCheckpointComment).
+   * The checkpoint is always the root comment in the thread (sequence id = 1).
+   *
+   * Requires _activePrId to be set — it is captured by createCheckpointComment,
+   * findCheckpointComment, and other PR-scoped methods on this adapter instance.
    */
   async updateCheckpointComment(
     commentId: string | number,
     checkpoint: ReviewCheckpoint
   ): Promise<void> {
-    const body = this.generateCheckpointBody(checkpoint);
-    const threadId = String(commentId);
+    if (!this._activePrId) {
+      throw new Error('[azure-adapter] updateCheckpointComment: no active prId (call findCheckpointComment first)');
+    }
+    const threadId = parseInt(String(commentId), 10);
+    const rootCommentId = 1; // checkpoint is always the first comment in the thread
 
     const url = this.getGitApiUrl(
-      `/repositories/${this.repository}/pullrequests/*/threads/${threadId}/comments?api-version=7.0`
+      `/repositories/${this.repository}/pullrequests/${this._activePrId}/threads/${threadId}/comments/${rootCommentId}?api-version=7.0`
     );
 
     const response = await fetch(url, {
       method: 'PATCH',
       headers: this.getAuthHeaders(),
-      body: JSON.stringify({
-        content: body
-      })
+      body: JSON.stringify({ content: this.generateCheckpointBody(checkpoint) })
     });
 
     if (!response.ok) {
-      throw new Error(`Failed to update checkpoint: ${response.statusText}`);
+      throw new Error(`Failed to update checkpoint thread ${threadId}: ${response.statusText}`);
     }
+  }
+
+  /**
+   * Delete a checkpoint comment (close the PR-level thread).
+   *
+   * commentId is the thread id. Azure DevOps does not expose a thread-delete endpoint;
+   * we instead close the thread, which hides it from the PR UI. The first comment (root)
+   * is also deleted when the thread contains only one comment and the API allows it.
+   *
+   * Requires _activePrId to be set by a prior PR-scoped call on this adapter instance.
+   */
+  async deleteCheckpointComment(commentId: string | number): Promise<void> {
+    if (!this._activePrId) {
+      throw new Error('[azure-adapter] deleteCheckpointComment: no active prId (call findCheckpointComment first)');
+    }
+    const threadId = parseInt(String(commentId), 10);
+    const prId = this._activePrId;
+
+    // Try deleting comment 1 first; if Azure refuses (solo comment), close the thread instead
+    const deleteUrl = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments/1?api-version=7.0`
+    );
+    const deleteResponse = await fetch(deleteUrl, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
+
+    if (deleteResponse.ok || deleteResponse.status === 204) return;
+
+    // Fallback: close the thread so it no longer appears in the PR timeline
+    await this.closeThread(prId, threadId);
   }
 
   /**
@@ -996,10 +1336,10 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   /**
-   * Check if discussion is locked (not supported in Azure DevOps)
+   * Check if discussion is locked.
+   * Azure DevOps has no equivalent to GitHub's locked discussion state.
    */
-  async isLocked(prId: string | number): Promise<boolean> {
-    // Azure DevOps doesn't have a direct equivalent to GitHub's "locked" state
+  async isLocked(_prId: string | number): Promise<boolean> {
     return false;
   }
 

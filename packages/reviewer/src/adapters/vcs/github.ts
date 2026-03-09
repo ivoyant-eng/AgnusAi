@@ -15,7 +15,8 @@ import {
   CommitComparison,
   PRComment,
   ReviewCheckpoint,
-  DetailedReviewComment
+  DetailedReviewComment,
+  PRDescriptionResult
 } from '../../types';
 import { AGNUSAI_MARKER } from '../../review/thread';
 
@@ -428,6 +429,40 @@ export class GitHubAdapter implements VCSAdapter {
   async getAuthor(prId: string | number): Promise<Author> {
     const pr = await this.getPR(prId);
     return pr.author;
+  }
+
+  async updatePRDescription(prId: string | number, description: PRDescriptionResult): Promise<void> {
+    await this.octokit.pulls.update({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId),
+      title: description.title,
+      body: description.body
+    });
+
+    const labelSet = new Set<string>();
+    labelSet.add(`type:${description.changeType}`);
+    for (const label of description.labels) {
+      const trimmed = label.trim();
+      if (trimmed) labelSet.add(trimmed);
+    }
+
+    const existing = await this.octokit.issues.listLabelsOnIssue({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: Number(prId),
+      per_page: 100,
+    });
+    const existingLower = new Set(existing.data.map(l => (l.name || '').toLowerCase()));
+    const missing = Array.from(labelSet).filter(l => !existingLower.has(l.toLowerCase()));
+    if (missing.length > 0) {
+      await this.octokit.issues.addLabels({
+        owner: this.owner,
+        repo: this.repo,
+        issue_number: Number(prId),
+        labels: missing,
+      });
+    }
   }
 
   async getFileContent(path: string, ref?: string): Promise<string> {
@@ -903,6 +938,19 @@ export class GitHubAdapter implements VCSAdapter {
       owner: this.owner,
       repo: this.repo,
       comment_id: Number(commentId)
+    });
+  }
+
+  /**
+   * Reply to an issue-level PR comment by posting a new issue comment.
+   * GitHub issue comments don't support threading, so we post at PR level.
+   */
+  async replyToComment(prId: string | number, _commentId: number, body: string): Promise<void> {
+    await this.octokit.issues.createComment({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: Number(prId),
+      body,
     });
   }
 

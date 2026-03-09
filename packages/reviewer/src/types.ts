@@ -58,6 +58,7 @@ export interface ReviewComment {
   severity: 'info' | 'warning' | 'error';
   suggestion?: string;
   confidence?: number;  // 0.0-1.0, self-assessed by LLM
+  sourceAgent?: AgentRole;
 }
 
 export interface Review {
@@ -90,6 +91,58 @@ export interface ReviewContext {
   skills: Skill[];
   config: ReviewConfig;
   graphContext?: GraphReviewContext;
+  agentRole?: AgentRole;
+  agentDirective?: string;
+  /** Concatenated content from .agnus/best_practices.md files */
+  bestPractices?: string;
+}
+
+export const AGENT_ROLES = [
+  'security',
+  'correctness',
+  'performance',
+  'style_maintainability',
+  'ticket_compliance',
+  'blast_radius',
+] as const;
+export type AgentRole = (typeof AGENT_ROLES)[number];
+
+export interface AgentInput {
+  role: AgentRole;
+  context: ReviewContext;
+}
+
+export interface AgentTelemetry {
+  role: AgentRole;
+  durationMs: number;
+  commentCount: number;
+  verdict: ReviewResult['verdict'];
+  tokensUsed?: number;
+  error?: string;
+}
+
+export interface AgentOutput {
+  role: AgentRole;
+  result: ReviewResult;
+  telemetry: AgentTelemetry;
+}
+
+export interface TicketComplianceVerdict {
+  ticketKey: string;
+  ticketTitle: string;
+  status: 'compliant' | 'partial' | 'noncompliant';
+  gaps: string;
+}
+
+export interface ConsolidatedReview extends ReviewResult {
+  agentTelemetry: AgentTelemetry[];
+  complianceVerdict?: TicketComplianceVerdict[];
+}
+
+export interface SplitSuggestion {
+  shouldSplit: boolean;
+  reason: string;
+  suggestedSplits: Array<{ name: string; files: string[] }>;
 }
 
 export interface ReviewResult {
@@ -97,6 +150,18 @@ export interface ReviewResult {
   comments: ReviewComment[];
   suggestions: CodeSuggestion[];
   verdict: 'approve' | 'request_changes' | 'comment';
+  tokensUsed?: number;
+  /** PR splitting recommendation, populated when SPLIT_DETECTION_ENABLED and heuristics fire */
+  splitSuggestion?: SplitSuggestion;
+}
+
+export type PRChangeType = 'bug' | 'feature' | 'refactor' | 'docs' | 'tests' | 'chore';
+
+export interface PRDescriptionResult {
+  title: string;
+  body: string;
+  changeType: PRChangeType;
+  labels: string[];
 }
 
 export interface CodeSuggestion {
@@ -113,6 +178,32 @@ export interface ReviewConfig {
   ignorePaths: string[];
   /** Minimum confidence threshold for comments (0.0–1.0). Default: 0.7 */
   precisionThreshold?: number;
+  /** Generate and write PR title/body/labels after review (default: true) */
+  enablePRDescription?: boolean;
+  /** Enable multi-agent specialist review orchestration */
+  multiAgentEnabled?: boolean;
+  /** Mode profile for enabled specialist set */
+  reviewMode?: 'single' | 'fast' | 'thorough' | 'auto';
+  /** Explicit list of enabled specialist roles */
+  enabledAgents?: AgentRole[];
+  /** Max parallel specialist executions */
+  agentConcurrency?: number;
+  /** Enable deterministic judge pass for dedup/conflict handling */
+  judgeEnabled?: boolean;
+  /** Judge strategy */
+  judgeMode?: 'deterministic' | 'llm';
+  /** Enable self-reflection second pass to re-score comments (default: false) */
+  selfReflectionEnabled?: boolean;
+  /** Score threshold 0–10 for self-reflection pass (default: 5) */
+  selfReflectionThreshold?: number;
+  /** Detect PRs that span too many unrelated concerns (default: true) */
+  splitDetectionEnabled?: boolean;
+  /** File count threshold to trigger split analysis (default: 15) */
+  splitFileThreshold?: number;
+  /** Load .agnus/best_practices.md files from VCS (default: true) */
+  bestPracticesEnabled?: boolean;
+  /** Max characters to include from best_practices.md files (default: 3000) */
+  bestPracticesMaxChars?: number;
 }
 
 export interface Skill {

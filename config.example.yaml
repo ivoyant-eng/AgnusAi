@@ -56,6 +56,9 @@ llm:
 review:
   # Maximum diff size in characters (to avoid token limits)
   maxDiffSize: 50000
+
+  # Generate and write PR title/body/labels after posting review
+  enablePRDescription: true
   
   # Focus areas (optional, can also be set via skills)
   focusAreas: []

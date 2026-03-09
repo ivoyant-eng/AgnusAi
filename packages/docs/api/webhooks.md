@@ -1,6 +1,6 @@
 # Webhooks
 
-AgnusAI listens for push and pull request events from GitHub and Azure DevOps.
+Ryv listens for push and pull request events from GitHub and Azure DevOps.
 
 ## GitHub
 
@@ -58,7 +58,13 @@ If `WEBHOOK_SECRET` is not set, signature verification is skipped (development o
 
 ### `POST /api/webhooks/azure`
 
-No signature verification (Azure uses service hook tokens configured separately).
+Requires a shared secret header:
+
+```
+X-Webhook-Secret: <your webhook secret>
+```
+
+For org-scoped endpoint (`/api/webhooks/azure/:orgSlug`), the secret is validated against that org's Azure webhook secret. Legacy endpoint falls back to `WEBHOOK_SECRET`.
 
 #### Push Event (`git.push`)
 

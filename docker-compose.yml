@@ -1,32 +1,4 @@
 services:
-  traefik:
-    image: traefik:v3.6.9
-    command:
-      - "--api.dashboard=true"
-      - "--api.insecure=true"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--providers.file.filename=/traefik/dynamic.yml"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      - "--entrypoints.websecure.address=:443"
-      - "--accesslog=true"
-      - "--log.level=INFO"
-    ports:
-      - "80:80"
-      - "443:443"
-      - "8080:8080"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/dynamic.yml:/traefik/dynamic.yml:ro
-      - /etc/nginx/ssl:/etc/nginx/ssl:ro
-    labels:
-      - "traefik.enable=false"
-    restart: unless-stopped
-    networks:
-      - agnus-network
-
   agnus:
     build: .
     environment:
@@ -39,6 +11,7 @@ services:
       - API_KEY=${API_KEY:-}
       - LLM_PROVIDER=${LLM_PROVIDER:-ollama}
       - LLM_MODEL=${LLM_MODEL:-qwen3.5:397b-cloud}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.2}
       - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
@@ -53,9 +26,34 @@ services:
       - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
       - REVIEW_DEPTH=${REVIEW_DEPTH:-standard}
       - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      # Multi-agent review
+      - MULTI_AGENT_ENABLED=${MULTI_AGENT_ENABLED:-false}
+      - REVIEW_MODE=${REVIEW_MODE:-single}
+      - AGENT_CONCURRENCY=${AGENT_CONCURRENCY:-2}
+      - ENABLED_AGENTS=${ENABLED_AGENTS:-}
+      - JUDGE_ENABLED=${JUDGE_ENABLED:-true}
+      - JUDGE_MODE=${JUDGE_MODE:-llm}
+      - SELF_REFLECTION_ENABLED=${SELF_REFLECTION_ENABLED:-false}
+      - SELF_REFLECTION_THRESHOLD=${SELF_REFLECTION_THRESHOLD:-7}
+      - PRECISION_THRESHOLD=${PRECISION_THRESHOLD:-0.7}
+      # Rules system
+      - RULES_SYSTEM_ENABLED=${RULES_SYSTEM_ENABLED:-true}
       - PUBLIC_URL=${PUBLIC_URL:-https://agnusai.platformnx.com}
       - BASE_URL=${BASE_URL:-https://agnusai.platformnx.com}
       - FEEDBACK_SECRET=${FEEDBACK_SECRET:-}
+      # Rate limiting / abuse protection
+      - TRUST_PROXY=${TRUST_PROXY:-true}
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_GLOBAL_MAX=${RATE_LIMIT_GLOBAL_MAX:-300}
+      - RATE_LIMIT_GLOBAL_WINDOW=${RATE_LIMIT_GLOBAL_WINDOW:-1 minute}
+      - RATE_LIMIT_AUTH_MAX=${RATE_LIMIT_AUTH_MAX:-20}
+      - RATE_LIMIT_AUTH_WINDOW=${RATE_LIMIT_AUTH_WINDOW:-1 minute}
+      - RATE_LIMIT_SIGNUP_MAX=${RATE_LIMIT_SIGNUP_MAX:-5}
+      - RATE_LIMIT_SIGNUP_WINDOW=${RATE_LIMIT_SIGNUP_WINDOW:-10 minutes}
+      - RATE_LIMIT_CHECK_ORG_MAX=${RATE_LIMIT_CHECK_ORG_MAX:-20}
+      - RATE_LIMIT_CHECK_ORG_WINDOW=${RATE_LIMIT_CHECK_ORG_WINDOW:-1 minute}
+      - RATE_LIMIT_WEBHOOK_MAX=${RATE_LIMIT_WEBHOOK_MAX:-120}
+      - RATE_LIMIT_WEBHOOK_WINDOW=${RATE_LIMIT_WEBHOOK_WINDOW:-1 minute}
       - HOST_ID=host.docker.internal
     volumes:
       - /tmp:/tmp:ro
@@ -64,18 +62,6 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.agnus-api.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.agnus-api.entrypoints=websecure"
-      - "traefik.http.routers.agnus-api.tls=true"
-      - "traefik.http.routers.agnus-api.service=agnus-api"
-      - "traefik.http.services.agnus-api.loadbalancer.server.port=3000"
-      - "traefik.http.routers.agnus-health.rule=Path(`/health`)"
-      - "traefik.http.routers.agnus-health.entrypoints=websecure"
-      - "traefik.http.routers.agnus-health.tls=true"
-      - "traefik.http.routers.agnus-health.service=agnus-health"
-      - "traefik.http.services.agnus-health.loadbalancer.server.port=3000"
     networks:
       - agnus-network
 
@@ -103,3 +89,4 @@ networks:
 volumes:
   postgres-data:
   repos-data:
+  # ollama-data:  # Uncomment if using Ollama

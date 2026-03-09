@@ -13,7 +13,8 @@ import {
   PRComment,
   ReviewCheckpoint,
   DetailedReviewComment,
-  FileRename
+  FileRename,
+  PRDescriptionResult
 } from '../../types';
 
 /**
@@ -41,6 +42,11 @@ export interface VCSAdapter {
   
   /** Get linked tickets/issues from PR description */
   getLinkedTickets(prId: string | number): Promise<Ticket[]>;
+
+  /**
+   * Update PR title and description/body
+   */
+  updatePRDescription?(prId: string | number, description: PRDescriptionResult): Promise<void>;
 
   // ============================================
   // Comments - Basic

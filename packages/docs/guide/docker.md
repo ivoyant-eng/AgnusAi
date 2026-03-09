@@ -1,6 +1,6 @@
 # Docker Compose
 
-The recommended way to self-host AgnusAI. The stack includes the API server, Postgres + pgvector, and Traefik reverse proxy. Ollama is **optional** — skip it if you use a cloud LLM/embedding provider.
+The recommended way to self-host Ryv. The stack includes the API server, Postgres + pgvector, and Traefik reverse proxy. Ollama is **optional** — skip it if you use a cloud LLM/embedding provider.
 
 ## One-Command Setup (Recommended)
 

@@ -1,13 +1,19 @@
 // Shared prompt builder — provider-agnostic
 
 import type { GraphReviewContext } from '@agnus-ai/shared';
-import { ReviewContext, Diff } from '../types';
+import { ReviewContext, Diff, ReviewResult } from '../types';
 
 export function buildReviewPrompt(context: ReviewContext): string {
   const { pr, diff, skills, config, graphContext } = context;
+  const agentRole = context.agentRole;
+  const agentDirective = context.agentDirective;
 
   const skillContext = skills.length > 0
     ? `\n## Review Skills Applied\n${skills.map(s => s.content).join('\n\n')}`
+    : '';
+
+  const bestPracticesSection = context.bestPractices
+    ? `\n## Team Best Practices\nApply these team-specific guidelines when reviewing this PR:\n\n${context.bestPractices}\n`
     : '';
 
   const graphSection = graphContext ? serializeGraphContext(graphContext) : '';
@@ -24,6 +30,18 @@ export function buildReviewPrompt(context: ReviewContext): string {
       `Avoid writing comments similar to these — developers on this repo have explicitly marked them as unhelpful.\n\n` +
       graphContext.rejectedExamples.map(e => `---\n${e}`).join('\n\n') + '\n'
     : ''
+  const rulesSection = (graphContext?.enforcedRules?.length)
+    ? `\n## Rule Enforcement Requirements\n` +
+      `These rules are enforced for this PR scope. Check each rule while reviewing.\n` +
+      `If you find a violation tied to one of these rules, include a single line in the comment body exactly as:\n` +
+      `Rule: <rule name>\n\n` +
+      graphContext.enforcedRules.map(rule =>
+        `- Rule: ${rule.name}\n` +
+        `  Category: ${rule.category}\n` +
+        `  Severity: ${rule.severity}\n` +
+        `  Requirement: ${rule.content}`
+      ).join('\n\n') + '\n'
+    : ''
 
   const fileList = diff.files
     .map(f => `- ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`)
@@ -35,6 +53,23 @@ export function buildReviewPrompt(context: ReviewContext): string {
   const truncationWarning = diffResult.truncated
     ? `\n⚠️ IMPORTANT: This diff was truncated. You have only seen the first portion (${diffResult.truncatedCount} more files not shown).\nDo NOT reference, guess, or comment on files not shown above.\nReview ONLY what is shown in the diff.\n`
     : '';
+  const roleSection = agentRole
+    ? `\n## Specialist Role\nRole: ${agentRole}\n${agentDirective ?? ''}\n`
+    : '';
+
+  const ticketsSection = (context.tickets && context.tickets.length > 0)
+    ? `\n## Linked Tickets\n` +
+      context.tickets.map(t =>
+        `### ${t.key}: ${t.title}\n` +
+        `- Status: ${t.status}\n` +
+        `- Type: ${t.type}\n` +
+        (t.labels.length > 0 ? `- Labels: ${t.labels.join(', ')}\n` : '') +
+        (t.description ? `\n${t.description.slice(0, 500)}\n` : '') +
+        (t.acceptanceCriteria?.length
+          ? `\n**Acceptance Criteria:**\n${t.acceptanceCriteria.map(c => `- ${c}`).join('\n')}\n`
+          : '')
+      ).join('\n')
+    : '';
 
   return `You are an expert code reviewer. Review this pull request and provide detailed, actionable feedback.
 
@@ -45,14 +80,14 @@ Branch: ${pr.sourceBranch} → ${pr.targetBranch}
 
 ## Description
 ${pr.description || 'No description provided.'}
-
+${ticketsSection}
 ## Changed Files (${diff.files.length} files)
 ${fileList}
 
 ## Diff
 ${diffResult.content}
-${graphSection}${skillContext}${examplesSection}${rejectedSection}
-${truncationWarning}
+${graphSection}${bestPracticesSection}${skillContext}${examplesSection}${rejectedSection}${rulesSection}
+${truncationWarning}${roleSection}
 
 ## Review Instructions
 1. Analyse the diff for issues: correctness, security, performance, maintainability
@@ -119,11 +154,13 @@ Example:
 RULES:
 - The [File:, Line:] marker must use the EXACT path from the diff (including any leading slash)
 - Every added line in the diff is prefixed with \`[Line N]\` showing its exact file line number. Use ONLY those numbers in your [File:, Line:] markers.
-- ONLY comment on \`[Line N] +\` lines (added lines). Lines starting with \`-\` are removals shown for context — do NOT place a comment on them.
+- ONLY comment on \`[Line N] +\` lines (added lines). Lines prefixed with \`[ctx N]\` are unchanged context lines shown so you can understand surrounding code (e.g. sibling elements) — do NOT place a comment on them. Lines starting with \`-\` are removals — do NOT place a comment on them either.
 - You may use <details>/<summary> for collapsible sections. Inside <details> blocks, use only plain text and bullet lists — never triple-backtick code fences inside <details> as they break rendering on Azure DevOps and other platforms.
 - If the PR looks good output VERDICT: approve with no comments
 - NEVER comment on whether a specific package/library version number is valid, exists, or is outdated. Your training data has a knowledge cutoff and package versions change constantly — you will be wrong. Skip ALL observations about version numbers, semver ranges, or whether a version is "the latest". Focus only on code logic, patterns, and correctness.
-- NEVER mention "blast radius", "graph context", "codebase context", or any internal tooling concepts in your review comments. Use the codebase context section only to understand impact — your comments must read as if written by a human reviewer who knows the codebase.`;
+- NEVER mention "blast radius", "graph context", "codebase context", or any internal tooling concepts in your review comments. Use the codebase context section only to understand impact — your comments must read as if written by a human reviewer who knows the codebase.
+- UI Permission Attribution: When flagging a missing permission check on a UI element (button, action, menu item), reference the line where the disabled/enabled prop (e.g. \`buttonDisabled\`, \`disabled\`, \`isDisabled\`) is set in the render config — NOT the callback function it invokes. The callback is irrelevant to the authorization gap; the unconditional prop is the finding.
+- UI Permission Consistency: If context lines show sibling buttons or actions in the same list/array where some apply \`hasPermission()\`, \`can()\`, or similar guards on their disabled state and others do not, flag the ungated element. A hardcoded \`buttonDisabled: false\` next to a properly-gated sibling is an access control bug.`;
 }
 
 export function serializeGraphContext(ctx: GraphReviewContext): string {
@@ -199,7 +236,9 @@ export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { conten
           } else if (line.startsWith('-')) {
             annotated.push(line); // keep removals for context, no line number
           } else {
-            newLineNo++; // context line — skip from output, still advance counter
+            // context line — include so agents can see surrounding code (e.g. sibling elements)
+            annotated.push(`[ctx ${newLineNo}] ${line}`);
+            newLineNo++;
           }
         }
         return `@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@\n${annotated.join('\n')}`;
@@ -218,4 +257,86 @@ export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { conten
   }
 
   return { content, truncated: false, truncatedCount: 0 };
+}
+
+export function buildAskPrompt(question: string, context: ReviewContext): string {
+  const { pr, diff } = context;
+  const maxChars = context.config?.maxDiffSize ?? 30000;
+  const diffResult = buildDiffSummary(diff, maxChars);
+  const graphSection = context.graphContext ? serializeGraphContext(context.graphContext) : '';
+
+  return `You are an expert code reviewer answering a question about a pull request.
+Answer the question below using the diff and codebase context provided.
+Be concise, accurate, and reference specific file paths and line numbers from the diff where relevant.
+
+## Question
+${question}
+
+## PR
+Title: ${pr.title}
+Branch: ${pr.sourceBranch} → ${pr.targetBranch}
+Author: ${pr.author.username}
+
+## Diff
+${diffResult.content}
+${graphSection}
+Answer the question directly. Do not repeat the question. Use markdown.`;
+}
+
+export function buildPRDescriptionPrompt(context: ReviewContext, review: ReviewResult): string {
+  const { pr, diff, config } = context;
+  const maxChars = config?.maxDiffSize ?? 30000;
+  const diffResult = buildDiffSummary(diff, maxChars);
+
+  const fileList = diff.files
+    .map(f => `- ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`)
+    .join('\n');
+
+  return `You are generating a high-quality pull request description for humans.
+
+## Current PR
+Title: ${pr.title}
+Author: ${pr.author.username}
+Branch: ${pr.sourceBranch} -> ${pr.targetBranch}
+
+## Existing Description
+${pr.description || 'No description provided.'}
+
+## Changed Files (${diff.files.length} files)
+${fileList}
+
+## Diff
+${diffResult.content}
+
+## Review Signal (for context)
+Summary: ${review.summary}
+Verdict: ${review.verdict}
+Comment Count: ${review.comments.length}
+
+## Task
+Generate:
+1) An improved PR title
+2) A complete PR body in markdown with these sections:
+   - ## What Changed
+   - ## Why It Changed
+   - ## Walkthrough
+3) Change type category: bug|feature|refactor|docs|tests|chore
+4) 2-6 labels (short slugs)
+
+## Walkthrough Rules
+- Use one bullet per materially changed file or module.
+- Keep each bullet concise and specific.
+- Mention concrete components/functions from the diff when available.
+
+## Output Format (STRICT)
+TITLE: <single line>
+CHANGE_TYPE: bug|feature|refactor|docs|tests|chore
+LABELS: label-one, label-two, label-three
+BODY:
+<full markdown body>
+
+Rules:
+- Do not include any extra sections outside the format above.
+- The markdown body must be valid and reviewer-friendly.
+- Avoid generic filler text.`;
 }

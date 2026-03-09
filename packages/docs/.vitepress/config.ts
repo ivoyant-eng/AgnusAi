@@ -3,8 +3,8 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   // Custom theme: packages/docs/.vitepress/theme/custom.css
   // Edit CSS vars in that file to change colors, fonts, border radius, etc.
-  title: 'AgnusAI',
-  description: 'Open-source, self-hostable AI code reviewer with graph-aware blast radius analysis',
+  title: 'Ryv AI',
+  description: 'Ryv AI — open-source, self-hostable AI code reviewer with graph-aware blast radius analysis, multi-agent review, and rules enforcement. Self-hosted, MIT licensed.',
   base: '/docs/',
 
   head: [
@@ -13,10 +13,10 @@ export default defineConfig({
 
   themeConfig: {
     logo: '/logo.svg',
-    siteTitle: 'AgnusAI',
+    siteTitle: 'Ryv AI',
 
     nav: [
-      { text: 'Guide', link: '/guide/getting-started' },
+      { text: 'Guide', link: '/guide/what-is-agnusai' },
       { text: 'Architecture', link: '/architecture/overview' },
       { text: 'API', link: '/api/rest' },
       { text: 'GitHub', link: 'https://github.com/ivoyant-eng/AgnusAi' },
@@ -26,8 +26,7 @@ export default defineConfig({
       {
         text: 'Getting Started',
         items: [
-          { text: 'What is AgnusAI?', link: '/guide/what-is-agnusai' },
-          { text: 'Quick Start (CLI)', link: '/guide/getting-started' },
+          { text: 'What is Ryv?', link: '/guide/what-is-agnusai' },
           { text: 'Hosted Service Setup', link: '/guide/hosted-setup' },
           { text: 'Docker Compose', link: '/guide/docker' },
           { text: 'Environment Variables', link: '/guide/env-vars' },
@@ -77,10 +76,12 @@ export default defineConfig({
       {
         text: 'Features',
         items: [
+          { text: 'Multi-Agent Review', link: '/reference/multi-agent' },
+          { text: 'Rules System', link: '/reference/rules' },
+          { text: 'Token Usage', link: '/reference/token-usage' },
           { text: 'Incremental Reviews', link: '/reference/incremental' },
           { text: 'Precision Filter', link: '/guide/review-modes#precision-filter' },
           { text: 'Smart Deduplication', link: '/reference/deduplication' },
-          { text: 'Skills System', link: '/reference/skills' },
           { text: 'Comment Threads', link: '/reference/comment-threads' },
           { text: 'Feedback & Learning Loop', link: '/guide/hosted-setup#feedback-learning-loop' },
           { text: 'Known Issues & Blindspots', link: '/reference/known-issues' },
@@ -114,7 +115,7 @@ export default defineConfig({
 
     footer: {
       message: 'Released under the MIT License.',
-      copyright: 'Copyright © 2025-present AgnusAI contributors',
+      copyright: 'Copyright © 2025-present Ryv AI contributors',
     },
 
     editLink: {

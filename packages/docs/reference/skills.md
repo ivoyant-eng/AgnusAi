@@ -1,6 +1,8 @@
-# Skills System
+# Skills (Internal)
 
-Skills allow you to inject custom review guidelines into the LLM prompt based on which files changed in the PR.
+> **Looking for user-configurable review policies?** See the [Rules System](/reference/rules) — it replaces Skills as the primary way to define org/repo standards without redeployment.
+
+Skills are the built-in, file-pattern-based review guidelines baked into the reviewer package. They inject content into the LLM prompt based on which files changed in the PR. Skills are internal defaults — use the **Rules System** for team-specific standards.
 
 ## What is a Skill?
 
@@ -28,7 +30,7 @@ patterns:
 
 ## Built-in Skills
 
-AgnusAI ships with three built-in skills in `packages/reviewer/skills/`:
+Ryv ships with three built-in skills in `packages/reviewer/skills/`:
 
 | Skill | Patterns | Focus |
 |-------|----------|-------|

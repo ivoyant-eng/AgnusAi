@@ -10,17 +10,21 @@
  *   ADMIN_EMAIL    — default admin@example.com
  *   ADMIN_PASSWORD — default changeme
  */
+export {}
 
 const BASE = process.env.API_URL ?? 'http://localhost'
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@example.com'
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'changeme'
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET ?? 'local-dev-secret'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 async function post(path: string, body: unknown, cookie = '') {
+  const headers: Record<string, string> = { 'content-type': 'application/json', cookie }
+  if (path === '/api/webhooks/azure') headers['x-webhook-secret'] = WEBHOOK_SECRET
   return fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', cookie },
+    headers,
     body: JSON.stringify(body),
   })
 }

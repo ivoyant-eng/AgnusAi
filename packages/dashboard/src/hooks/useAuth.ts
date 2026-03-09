@@ -1,10 +1,5 @@
 import useSWR from 'swr'
-
-export interface AuthUser {
-  id: string
-  email: string
-  role: 'admin' | 'member'
-}
+import type { AuthUser } from '../types/auth'
 
 const fetcher = (url: string) =>
   fetch(url, { credentials: 'include' }).then(res => {

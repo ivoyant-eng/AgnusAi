@@ -75,19 +75,80 @@ curl -N -b /tmp/agnus.txt \
   "http://localhost:3000/api/repos/{repoId}/index/status?branch=main"
 ```
 
+## Organizations
+
+Ryv is multi-tenant. Every deployment starts with a single **default** org. All repos, members, webhooks, and rules belong to an org.
+
+| Concept | Description |
+|---------|-------------|
+| **Org slug** | URL-safe identifier, e.g. `default` or `acme-corp` |
+| **Org admin** | Can manage webhooks, rules, team members, and settings |
+| **Member** | Can view repos and reviews for repos in their org |
+
+The admin bootstrapped from `ADMIN_EMAIL` / `ADMIN_PASSWORD` is automatically added as org admin of the `default` org.
+
 ## Configure GitHub Webhooks
 
+Each org has a dedicated webhook path so secrets and routing are isolated.
+
 1. Go to your repo → **Settings** → **Webhooks** → **Add webhook**
-2. **Payload URL:** `https://your-server.com/api/webhooks/github`
+2. **Payload URL:** `https://your-server.com/api/webhooks/github/default`
+   _(replace `default` with your org slug if using multiple orgs)_
 3. **Content type:** `application/json`
-4. **Secret:** value of `WEBHOOK_SECRET` from your `.env`
+4. **Secret:** the webhook secret from **Settings → Webhook Secrets** in the dashboard
 5. **Events:** `Push` + `Pull requests`
+
+### Managing Webhook Secrets
+
+Webhook secrets are managed per org and per platform in **Settings → Webhook Secrets**. You can generate or rotate a secret without redeploying — just update the secret in GitHub/Azure after rotating.
+
+Via API:
+
+```bash
+# Get current secrets
+GET /api/orgs/default/webhooks
+
+# Rotate secret for a platform
+POST /api/orgs/default/webhooks/rotate
+{ "platform": "github" }
+# → { "secret": "new-plaintext-secret" }   (shown once)
+```
 
 ## Configure Azure DevOps Webhooks
 
 1. Go to your project → **Project Settings** → **Service hooks**
-2. Add subscription for `git.push` and `git.pullrequest.created` / `git.pullrequest.updated`
-3. **URL:** `https://your-server.com/api/webhooks/azure`
+2. Add subscription for `git.push`, `git.pullrequest.created`, and `git.pullrequest.updated`
+3. **URL:** `https://your-server.com/api/webhooks/azure/default`
+4. In the **HTTP Headers** field, add: `X-Webhook-Secret: <your-webhook-secret>`
+
+Get the secret from **Settings → Webhook Secrets → Azure**.
+
+## Enable Multi-Agent Review
+
+Add to your `.env` (or Docker Compose environment):
+
+```env
+MULTI_AGENT_ENABLED=true
+REVIEW_MODE=thorough       # all applicable specialist agents
+AGENT_CONCURRENCY=2        # run 2 agents in parallel
+JUDGE_ENABLED=true
+JUDGE_MODE=deterministic
+```
+
+See [Multi-Agent Review →](/reference/multi-agent) for agent roles, judge modes, and cost estimates.
+
+## Set Up Rules
+
+Rules let org admins define code standards that are enforced on every PR review.
+
+1. Open the Dashboard → **Rules**
+2. Click **New Rule** and describe your policy in plain language
+3. Choose the scope (`org`, `repo`, or `path`)
+4. Enable the rule — it takes effect on the next review
+
+Rules system is enabled by default. To disable: `RULES_SYSTEM_ENABLED=false`.
+
+See [Rules System →](/reference/rules).
 
 ## Inviting Team Members
 

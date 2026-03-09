@@ -3,6 +3,7 @@ import { Copy, CheckCircle } from 'lucide-react'
 import { useState } from 'react'
 import useSWR from 'swr'
 import { Badge } from '@/components/ui/badge'
+import { useAuth } from '@/hooks/useAuth'
 
 const fetcher = (url: string) => fetch(url, { credentials: 'include' }).then(r => r.json())
 
@@ -14,12 +15,16 @@ interface Repo {
 export default function Ready() {
   const { repoId } = useParams<{ repoId: string }>()
   const [copied, setCopied] = useState(false)
+  const { user } = useAuth()
 
   const { data: repos } = useSWR<Repo[]>('/api/repos', fetcher)
   const repo = repos?.find(r => r.repoId === repoId)
 
   const platform = repo?.platform ?? 'github'
-  const webhookPath = platform === 'azure' ? '/api/webhooks/azure' : '/api/webhooks/github'
+  const activeOrgSlug = user?.orgs?.find(o => o.orgId === user.activeOrgId)?.slug
+  const webhookPath = platform === 'azure'
+    ? (activeOrgSlug ? `/api/webhooks/azure/${activeOrgSlug}` : '/api/webhooks/azure')
+    : (activeOrgSlug ? `/api/webhooks/github/${activeOrgSlug}` : '/api/webhooks/github')
   const webhookUrl = `${window.location.origin}${webhookPath}`
 
   const platformLabel = platform === 'azure' ? 'Azure DevOps' : 'GitHub'
@@ -53,7 +58,7 @@ export default function Ready() {
           {
             n: '02',
             title: 'Open a Pull Request',
-            desc: 'AgnusAI fetches the diff, assembles graph context, and posts a review.',
+            desc: 'Ryv fetches the diff, assembles graph context, and posts a review.',
           },
           {
             n: '03',
@@ -104,7 +109,11 @@ export default function Ready() {
           </div>
           <div className="py-4 pl-8">
             <p className="label-meta">Secret</p>
-            <p className="font-mono text-sm mt-1">Use value of WEBHOOK_SECRET from .env</p>
+            <p className="font-mono text-sm mt-1">
+              {platform === 'azure'
+                ? 'Set header X-Webhook-Secret to your webhook secret'
+                : 'Use value of WEBHOOK_SECRET from .env'}
+            </p>
           </div>
         </div>
       </section>

@@ -13,7 +13,7 @@ export async function seedAdminUser(pool: Pool): Promise<void> {
   const id = crypto.randomUUID()
   const hash = await bcrypt.hash(password, 10)
   await pool.query(
-    `INSERT INTO users (id, email, password_hash, role) VALUES ($1, $2, $3, 'admin')`,
+    `INSERT INTO users (id, email, password_hash, role, is_system_admin) VALUES ($1, $2, $3, 'admin', true)`,
     [id, email, hash],
   )
   console.info(`[seed] Admin user created: ${email}`)

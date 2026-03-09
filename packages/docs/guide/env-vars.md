@@ -33,6 +33,7 @@ Set `LLM_PROVIDER` to select your provider, then fill in the provider-specific v
 |----------|---------|-------------|
 | `LLM_PROVIDER` | `ollama` | `ollama` \| `openai` \| `azure` \| `claude` \| `custom` |
 | `LLM_MODEL` | `qwen3.5:397b-cloud` | Model or deployment name. Provider-specific. |
+| `LLM_TEMPERATURE` | `0.2` | Sampling temperature for agent generation (0.0–1.0). `0.2` gives low variance while preserving non-obvious reasoning. Judge and self-reflection calls are always forced to `0` regardless of this value. |
 
 ### Ollama
 
@@ -85,8 +86,44 @@ Azure embeddings reuse `AZURE_API_VERSION` from the LLM section.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REVIEW_DEPTH` | `standard` | `fast` — 1-hop graph, no embeddings. `standard` — 2-hop graph, no embeddings. `deep` — 2-hop + semantic neighbors via embedding search. |
-| `PRECISION_THRESHOLD` | `0.7` | Minimum LLM confidence score (0.0–1.0) required to post a comment. Comments with `[Confidence: X.X]` below this threshold are silently dropped. |
+| `PRECISION_THRESHOLD` | `0.7` | Minimum LLM self-assessed confidence score (0.0–1.0) a comment must carry to be posted. Comments reporting `[Confidence: X.X]` below this value are silently dropped. Raise to `0.75`–`0.8` to reduce low-confidence noise. |
 | `MAX_DIFF_SIZE` | `150000` | Maximum characters of diff sent to the LLM. Increase for large PRs. |
+
+## Multi-Agent Review
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MULTI_AGENT_ENABLED` | `false` | Enable the parallel specialist agent pipeline. |
+| `REVIEW_MODE` | `single` | `single` — original single-agent. `fast` — security + correctness only. `thorough` — all applicable agents. |
+| `AGENT_CONCURRENCY` | `2` | Number of specialist agents that run in parallel. |
+| `ENABLED_AGENTS` | _(all)_ | Comma-separated list to override which agents run, e.g. `security,correctness`. |
+| `JUDGE_ENABLED` | `true` | Run a deduplication/consolidation judge pass after agents complete. |
+| `JUDGE_MODE` | `llm` (when multi-agent on) | `llm` — LLM semantically deduplicates and selects the best findings (default when `MULTI_AGENT_ENABLED=true`). `deterministic` — fast rule-based dedup by location only, no extra LLM call. |
+| `SELF_REFLECTION_ENABLED` | `false` | Enable a second LLM pass that re-scores every surviving comment 0–10 based on evidence quality and drops those below `SELF_REFLECTION_THRESHOLD`. Reduces noise at the cost of one extra LLM call. |
+| `SELF_REFLECTION_THRESHOLD` | `5` | Minimum score (0–10) a comment must receive in the self-reflection pass to survive. `6` is recommended for stricter signal-to-noise. |
+
+See [Multi-Agent Review](/reference/multi-agent) for full details.
+
+## Rules
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RULES_SYSTEM_ENABLED` | `true` | Enable rule enforcement during reviews. Set to `false` to disable globally. |
+
+See [Rules System](/reference/rules) for full details.
+
+## Rate Limiting
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RATE_LIMIT_ENABLED` | `true` | Enable rate limiting on all endpoints. |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` header for IP detection (set `true` behind a reverse proxy like Traefik/nginx). |
+| `RATE_LIMIT_GLOBAL_MAX` | `300` | Max requests per IP per global window. |
+| `RATE_LIMIT_GLOBAL_WINDOW` | `1 minute` | Global rate limit window. |
+| `RATE_LIMIT_AUTH_MAX` | `20` | Max login/signup attempts per IP per auth window. |
+| `RATE_LIMIT_AUTH_WINDOW` | `1 minute` | Auth rate limit window. |
+| `RATE_LIMIT_WEBHOOK_MAX` | `120` | Max webhook events per IP per webhook window. |
+| `RATE_LIMIT_WEBHOOK_WINDOW` | `1 minute` | Webhook rate limit window. |
 
 ## Server
 
@@ -152,8 +189,17 @@ EMBEDDING_MODEL=qwen3-embedding:0.6b
 
 # Review depth
 REVIEW_DEPTH=standard
-PRECISION_THRESHOLD=0.7
+PRECISION_THRESHOLD=0.75
 MAX_DIFF_SIZE=150000
+
+# Multi-agent review (optional — enables parallel specialist agents)
+MULTI_AGENT_ENABLED=true
+REVIEW_MODE=thorough
+AGENT_CONCURRENCY=2
+JUDGE_ENABLED=true
+JUDGE_MODE=llm
+SELF_REFLECTION_ENABLED=true
+SELF_REFLECTION_THRESHOLD=6
 
 # VCS
 GITHUB_TOKEN=ghp_...

@@ -1,6 +1,6 @@
 # Incremental Reviews
 
-AgnusAI tracks which commit was last reviewed using a hidden checkpoint comment in the PR. On subsequent pushes, only new changes since the last review are re-reviewed.
+Ryv tracks which commit was last reviewed using a hidden checkpoint comment in the PR. On subsequent pushes, only new changes since the last review are re-reviewed.
 
 ## How It Works
 
@@ -15,7 +15,7 @@ After every review, a checkpoint comment is posted (or updated) on the PR:
   "verdict": "request_changes"
 } -->
 
-## 🔍 AgnusAI Review Checkpoint
+## 🔍 Ryv Review Checkpoint
 
 **Last reviewed commit:** `abc1234`
 ...
@@ -58,7 +58,7 @@ Azure DevOps uses a different mechanism. Instead of checkpoint comments, it uses
 | `git.pullrequest.created` | Full diff (`$compareTo=0` — all iterations) |
 | `git.pullrequest.updated` | Incremental diff (`$compareTo=latest.id - 1` — only new commits) |
 
-When a PR is updated (new commits pushed), the webhook fires with `git.pullrequest.updated`. AgnusAI automatically diffs only the latest iteration against the previous one, so the LLM only reviews the new changes.
+When a PR is updated (new commits pushed), the webhook fires with `git.pullrequest.updated`. Ryv automatically diffs only the latest iteration against the previous one, so the LLM only reviews the new changes.
 
 ### Base commit
 

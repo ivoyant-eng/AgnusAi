@@ -220,7 +220,8 @@ function loadConfig(configPath: string): Config {
     review: {
       maxDiffSize: 50000,
       focusAreas: [],
-      ignorePaths: ['node_modules', 'dist', 'build', '.git']
+      ignorePaths: ['node_modules', 'dist', 'build', '.git'],
+      enablePRDescription: true
     },
     skills: {
       path: DEFAULT_SKILLS_PATH,

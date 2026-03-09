@@ -1,8 +1,10 @@
 import { Link } from 'react-router-dom'
 import { useTheme } from '@/hooks/useTheme'
+import { APP_NAME } from '@/config/app'
 
 export function LandingHeader() {
   const { isDark, toggle } = useTheme()
+  const brandLabel = `~/${APP_NAME.toLowerCase()}`
 
   return (
     <header
@@ -46,7 +48,7 @@ export function LandingHeader() {
               background: 'var(--syn-str)',
             }}
           />
-          <span style={{ fontWeight: 700 }}>~/agnus-ai</span>
+          <span style={{ fontWeight: 700 }}>{brandLabel}</span>
           <span
             className="animate-blink"
             style={{
@@ -58,7 +60,6 @@ export function LandingHeader() {
           />
         </Link>
         <nav style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          {/* /docs/ is Fastify VitePress, NOT React Router — use <a> not <Link> */}
           <a href="/docs/" className="nav-pill">
             <span className="cmd">$</span> man docs
           </a>

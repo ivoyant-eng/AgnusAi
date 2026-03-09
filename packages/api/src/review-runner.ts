@@ -4,7 +4,7 @@
  */
 import crypto from 'crypto'
 import path from 'path'
-import { PRReviewAgent, GitHubAdapter, AzureDevOpsAdapter, createBackendFromEnv } from '@agnus-ai/reviewer'
+import { PRReviewAgent, GitHubAdapter, AzureDevOpsAdapter, createBackendFromEnv, JiraAdapter, LinearAdapter, AzureBoardsAdapter, GitHubIssuesAdapter } from '@agnus-ai/reviewer'
 import type { Config } from '@agnus-ai/reviewer'
 import type { Pool } from 'pg'
 
@@ -12,7 +12,30 @@ import type { Pool } from 'pg'
 const SKILLS_PATH = path.join(require.resolve('@agnus-ai/reviewer'), '../../..', 'skills')
 import { getRepo } from './graph-cache'
 import { createEmbeddingAdapter } from './embedding-factory'
-import type { GraphReviewContext } from '@agnus-ai/shared'
+import type { EnforcedRuleContext, GraphReviewContext } from '@agnus-ai/shared'
+import {
+  DEFAULT_REPO_PR_DESCRIPTION_SETTINGS,
+  normalizeRepoPRDescriptionSettings,
+  resolveRepoPRDescriptionSettings,
+} from './repo-settings'
+import { evaluateRuleSignals, isRuleApplicable, type RuleCandidate } from './rules-enforcement'
+
+const AGENT_ROLES = [
+  'security',
+  'correctness',
+  'performance',
+  'style_maintainability',
+  'ticket_compliance',
+  'blast_radius',
+] as const
+type AgentRole = (typeof AGENT_ROLES)[number]
+
+function parseEnabledAgents(raw: string | undefined): AgentRole[] | undefined {
+  if (!raw?.trim()) return undefined
+  const values = raw.split(',').map(v => v.trim()).filter(Boolean)
+  const filtered = values.filter((v): v is AgentRole => (AGENT_ROLES as readonly string[]).includes(v))
+  return filtered.length > 0 ? filtered : undefined
+}
 
 // Sequential per-PR lock — prevents concurrent webhooks posting duplicate comments
 const prReviewLocks = new Map<string, Promise<void>>()
@@ -64,6 +87,71 @@ export interface ReviewRunOptions {
   incrementalReview?: boolean
   /** If true, skips posting comments and DB inserts — returns comments in the response for inspection */
   dryRun?: boolean
+  /** If false, skip PR title/body/labels write-back while still posting review comments */
+  updatePRDescription?: boolean
+  /** PR event action to evaluate created-only vs updated behavior */
+  prAction?: 'created' | 'updated' | 'opened' | 'synchronize' | 'manual'
+}
+
+type RuleRow = {
+  id: string
+  name: string
+  content: string
+  category: string
+  severity: string
+  scope_type: string
+  repo_id: string | null
+  path_pattern: string | null
+}
+
+async function resolveRepoOrgId(pool: Pool, repoId: string): Promise<string | null> {
+  const res = await pool.query<{ org_id: string }>(
+    'SELECT org_id FROM repos WHERE repo_id = $1 LIMIT 1',
+    [repoId],
+  )
+  return res.rows[0]?.org_id ?? null
+}
+
+function toRuleCandidate(row: RuleRow): RuleCandidate {
+  return {
+    id: row.id,
+    name: row.name,
+    content: row.content,
+    category: row.category as any,
+    severity: row.severity as any,
+    scopeType: row.scope_type as any,
+    repoId: row.repo_id,
+    pathPattern: row.path_pattern,
+  }
+}
+
+function toEnforcedRuleContext(rule: RuleCandidate): EnforcedRuleContext {
+  return {
+    id: rule.id,
+    name: rule.name,
+    content: rule.content,
+    category: rule.category,
+    severity: rule.severity,
+    scopeType: rule.scopeType,
+    repoId: rule.repoId,
+    pathPattern: rule.pathPattern,
+  }
+}
+
+async function resolveApplicableRules(
+  pool: Pool,
+  orgId: string,
+  repoId: string,
+  changedPaths: string[],
+): Promise<RuleCandidate[]> {
+  const res = await pool.query<RuleRow>(
+    `SELECT id, name, content, category, severity, scope_type, repo_id, path_pattern
+     FROM rules
+     WHERE org_id = $1 AND enabled = true`,
+    [orgId],
+  )
+  const candidates = res.rows.map(toRuleCandidate)
+  return candidates.filter(rule => isRuleApplicable(rule, repoId, changedPaths))
 }
 
 export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; comments?: any[] }> {
@@ -110,8 +198,10 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
         return { verdict: 'comment', commentCount: 0, reviewId: '' }
       }
       azureAdapter!.compareToIteration = lastReviewedNow  // 0 = full diff on first review
+      // First review of this PR (lastReviewedNow=0) — treat as 'created' so description update runs
+      const effectivePrAction = lastReviewedNow === 0 ? ('created' as const) : opts.prAction
       console.log(`[review-runner] Azure PR ${prNumber}: reviewing iteration ${latestIteration}, compareToIteration=${lastReviewedNow}`)
-      const result = await executeReview(opts, vcs, pool)
+      const result = await executeReview({ ...opts, prAction: effectivePrAction }, vcs, pool)
       await saveLastReviewedIteration(pool, repoId, prNumber, latestIteration)
       console.log(`[review-runner] Azure PR ${prNumber}: saved last_reviewed_iteration=${latestIteration}`)
       return result
@@ -153,6 +243,20 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
       focusAreas: [],
       ignorePaths: ['node_modules', 'dist', 'build', '.git'],
       precisionThreshold: process.env.PRECISION_THRESHOLD ? parseFloat(process.env.PRECISION_THRESHOLD) : 0.7,
+      multiAgentEnabled: (process.env.MULTI_AGENT_ENABLED ?? 'false').toLowerCase() === 'true',
+      reviewMode: ((process.env.REVIEW_MODE ?? 'single').toLowerCase() as 'single' | 'fast' | 'thorough' | 'auto'),
+      enabledAgents: parseEnabledAgents(process.env.ENABLED_AGENTS),
+      agentConcurrency: process.env.AGENT_CONCURRENCY ? parseInt(process.env.AGENT_CONCURRENCY, 10) : 2,
+      judgeEnabled: (process.env.JUDGE_ENABLED ?? 'true').toLowerCase() !== 'false',
+      judgeMode: process.env.JUDGE_MODE
+        ? process.env.JUDGE_MODE.toLowerCase() === 'llm' ? 'llm' : 'deterministic'
+        : (process.env.MULTI_AGENT_ENABLED ?? 'false').toLowerCase() === 'true' ? 'llm' : 'deterministic',
+      selfReflectionEnabled: (process.env.SELF_REFLECTION_ENABLED ?? 'false').toLowerCase() === 'true',
+      selfReflectionThreshold: process.env.SELF_REFLECTION_THRESHOLD ? parseInt(process.env.SELF_REFLECTION_THRESHOLD, 10) : 5,
+      splitDetectionEnabled: (process.env.SPLIT_DETECTION_ENABLED ?? 'true').toLowerCase() !== 'false',
+      splitFileThreshold: process.env.SPLIT_FILE_THRESHOLD ? parseInt(process.env.SPLIT_FILE_THRESHOLD, 10) : 15,
+      bestPracticesEnabled: (process.env.BEST_PRACTICES_ENABLED ?? 'true').toLowerCase() !== 'false',
+      bestPracticesMaxChars: process.env.BEST_PRACTICES_MAX_CHARS ? parseInt(process.env.BEST_PRACTICES_MAX_CHARS, 10) : 3000,
     },
     skills: {
       path: SKILLS_PATH,
@@ -167,8 +271,49 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
   agent.setVCS(vcs)
   agent.setLLM(llm)
 
+  // Wire ticket adapter based on TICKET_PROVIDER env var
+  const ticketProvider = process.env.TICKET_PROVIDER?.toLowerCase()
+  if (ticketProvider === 'jira') {
+    const { JIRA_URL, JIRA_TOKEN, JIRA_EMAIL, JIRA_AC_FIELD } = process.env
+    if (JIRA_URL && JIRA_TOKEN && JIRA_EMAIL) {
+      agent.addTicketAdapter(new JiraAdapter({ url: JIRA_URL, token: JIRA_TOKEN, email: JIRA_EMAIL, acceptanceCriteriaField: JIRA_AC_FIELD }))
+      console.log('[review-runner] Jira ticket adapter registered')
+    } else {
+      console.warn('[review-runner] TICKET_PROVIDER=jira but JIRA_URL/JIRA_TOKEN/JIRA_EMAIL not set — skipping')
+    }
+  } else if (ticketProvider === 'linear') {
+    const { LINEAR_API_KEY } = process.env
+    if (LINEAR_API_KEY) {
+      agent.addTicketAdapter(new LinearAdapter({ apiKey: LINEAR_API_KEY }))
+      console.log('[review-runner] Linear ticket adapter registered')
+    } else {
+      console.warn('[review-runner] TICKET_PROVIDER=linear but LINEAR_API_KEY not set — skipping')
+    }
+  } else if (ticketProvider === 'azure-boards') {
+    const { AZURE_BOARDS_ORG, AZURE_BOARDS_PROJECT, AZURE_BOARDS_TOKEN } = process.env
+    if (AZURE_BOARDS_ORG && AZURE_BOARDS_PROJECT && AZURE_BOARDS_TOKEN) {
+      agent.addTicketAdapter(new AzureBoardsAdapter({ organization: AZURE_BOARDS_ORG, project: AZURE_BOARDS_PROJECT, token: AZURE_BOARDS_TOKEN }))
+      console.log('[review-runner] Azure Boards ticket adapter registered')
+    } else {
+      console.warn('[review-runner] TICKET_PROVIDER=azure-boards but AZURE_BOARDS_ORG/PROJECT/TOKEN not set — skipping')
+    }
+  } else if (ticketProvider === 'github-issues') {
+    const { GITHUB_ISSUES_REPO, GITHUB_TOKEN } = process.env
+    if (GITHUB_ISSUES_REPO && GITHUB_TOKEN) {
+      const [owner, repo] = GITHUB_ISSUES_REPO.split('/')
+      if (owner && repo) {
+        agent.addTicketAdapter(new GitHubIssuesAdapter({ owner, repo, token: GITHUB_TOKEN }))
+        console.log('[review-runner] GitHub Issues ticket adapter registered')
+      }
+    } else {
+      console.warn('[review-runner] TICKET_PROVIDER=github-issues but GITHUB_ISSUES_REPO/GITHUB_TOKEN not set — skipping')
+    }
+  }
+
   // Hoist diff to outer scope so it's available for RAG retrieval
   const diffString = await fetchDiffString(vcs, prNumber)
+  const changedPaths = await fetchChangedPaths(vcs, prNumber)
+  const orgId = await resolveRepoOrgId(pool, repoId)
 
   // Nothing to review — incremental diff was empty (e.g. no new commits since last review)
   if (!diffString || diffString.trim().length === 0) {
@@ -245,9 +390,43 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
     }
   }
 
+  // Resolve org/repo/path scoped rule set and inject it into prompt context
+  let applicableRules: RuleCandidate[] = []
+  if (orgId) {
+    applicableRules = await resolveApplicableRules(pool, orgId, repoId, changedPaths)
+    if (applicableRules.length > 0) {
+      if (!graphContext) {
+        graphContext = {
+          changedSymbols: [],
+          callers: [],
+          callees: [],
+          blastRadius: { directCallers: [], transitiveCallers: [], affectedFiles: [], riskScore: 0 },
+          semanticNeighbors: [],
+        }
+      }
+      graphContext.enforcedRules = applicableRules.map(toEnforcedRuleContext)
+    }
+  }
+
   const result = opts.incrementalReview && platform === 'github'
     ? await agent.incrementalReview(prNumber, {}, graphContext)
     : await agent.review(prNumber, graphContext)
+  const agentTelemetry = Array.isArray((result as any).agentTelemetry)
+    ? (result as any).agentTelemetry
+    : []
+  if (agentTelemetry.length > 0) {
+    console.log(
+      `[review-runner] multi-agent telemetry for PR ${prNumber}: ${JSON.stringify(
+        agentTelemetry.map((t: any) => ({
+          role: t.role,
+          durationMs: t.durationMs,
+          commentCount: t.commentCount,
+          verdict: t.verdict,
+          error: t.error ?? null,
+        })),
+      )}`,
+    )
+  }
 
   // Generate a stable reviewId upfront so review_comments can FK into reviews
   const reviewId = crypto.randomUUID()
@@ -263,6 +442,12 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
   const commentRows: Array<{ id: string; path: string; line: number; body: string; severity: string; confidence: number | null }> = []
 
   const comments: any[] = Array.isArray((result as any).comments) ? (result as any).comments : []
+  const ruleSignals = applicableRules.length > 0
+    ? evaluateRuleSignals(
+      applicableRules,
+      comments.map((c: any) => ({ path: c.path, line: c.line, body: c.body })),
+    )
+    : { evaluations: [], violations: [] }
 
   if (baseUrl && feedbackSecret) {
     for (const comment of comments) {
@@ -305,6 +490,7 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
         line: c.line,
         severity: c.severity,
         confidence: c.confidence,
+        sourceAgent: c.sourceAgent ?? null,
         body: c.body,
       })),
     }
@@ -315,6 +501,59 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
     `INSERT INTO reviews (id, repo_id, pr_number, verdict, comment_count) VALUES ($1,$2,$3,$4,$5)`,
     [reviewId, repoId, prNumber, (result as any).verdict ?? 'unknown', comments.length],
   )
+
+  if (orgId && ruleSignals.evaluations.length > 0) {
+    for (const evaluation of ruleSignals.evaluations) {
+      await pool.query(
+        `INSERT INTO rule_evaluations (id, rule_id, org_id, repo_id, review_id, pr_number, passed)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [crypto.randomUUID(), evaluation.ruleId, orgId, repoId, reviewId, prNumber, evaluation.passed],
+      )
+    }
+  }
+
+  if (orgId && ruleSignals.violations.length > 0) {
+    for (const violation of ruleSignals.violations) {
+      await pool.query(
+        `INSERT INTO rule_violations (id, rule_id, org_id, repo_id, review_id, pr_number, file_path, line_number, comment_body, status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'open')`,
+        [
+          crypto.randomUUID(),
+          violation.ruleId,
+          orgId,
+          repoId,
+          reviewId,
+          prNumber,
+          violation.filePath,
+          violation.lineNumber,
+          violation.commentBody,
+        ],
+      )
+    }
+  }
+
+  if (orgId && agentTelemetry.length > 0) {
+    for (const telemetry of agentTelemetry) {
+      await pool.query(
+        `INSERT INTO review_agent_telemetry (
+           id, review_id, org_id, repo_id, pr_number, agent_role, verdict, comment_count, duration_ms, tokens_used, error
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          crypto.randomUUID(),
+          reviewId,
+          orgId,
+          repoId,
+          prNumber,
+          String(telemetry.role ?? 'correctness'),
+          String(telemetry.verdict ?? 'comment'),
+          Number.isFinite(telemetry.commentCount) ? Number(telemetry.commentCount) : 0,
+          Number.isFinite(telemetry.durationMs) ? Number(telemetry.durationMs) : 0,
+          Number.isFinite(telemetry.tokensUsed) ? Number(telemetry.tokensUsed) : null,
+          telemetry.error ? String(telemetry.error) : null,
+        ],
+      )
+    }
+  }
 
   // Bulk-insert individual comment rows for feedback correlation
   if (commentRows.length > 0) {
@@ -344,7 +583,72 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
   }
 
   // Post to GitHub/Azure (comment bodies now include feedback links)
-  await agent.postReview(prNumber, result)
+  // Resolve org-level defaults + repo-level overrides for PR description behavior
+  const orgIdentityRows = await pool.query<{ slug: string }>(
+    `SELECT o.slug
+     FROM repos r
+     JOIN organizations o ON o.id = r.org_id
+     WHERE r.repo_id = $1
+     LIMIT 1`,
+    [repoId],
+  )
+  const orgKey = orgIdentityRows.rows[0]?.slug ?? 'default'
+  const orgRows = await pool.query(
+    `SELECT
+       pr_description_enabled,
+       pr_description_update_mode,
+       pr_description_publish_mode,
+       pr_description_preserve_original,
+       pr_description_use_markers,
+       pr_description_publish_labels
+     FROM org_settings WHERE org_key = $1`,
+    [orgKey],
+  )
+  const orgSettings = orgRows.rows[0]
+    ? normalizeRepoPRDescriptionSettings(orgRows.rows[0] as any)
+    : DEFAULT_REPO_PR_DESCRIPTION_SETTINGS
+
+  const repoRows = await pool.query(
+    `SELECT
+       pr_description_enabled,
+       pr_description_update_mode,
+       pr_description_publish_mode,
+       pr_description_preserve_original,
+       pr_description_use_markers,
+       pr_description_publish_labels
+     FROM repo_settings WHERE repo_id = $1`,
+    [repoId],
+  )
+  const repoOverrides = repoRows.rows[0]
+    ? {
+        enabled: repoRows.rows[0].pr_description_enabled as boolean | null,
+        updateMode: repoRows.rows[0].pr_description_update_mode as any,
+        publishMode: repoRows.rows[0].pr_description_publish_mode as any,
+        preserveOriginal: repoRows.rows[0].pr_description_preserve_original as boolean | null,
+        useMarkers: repoRows.rows[0].pr_description_use_markers as boolean | null,
+        publishLabels: repoRows.rows[0].pr_description_publish_labels as boolean | null,
+      }
+    : {}
+  const prSettings = resolveRepoPRDescriptionSettings(orgSettings, repoOverrides)
+
+  const action = opts.prAction ?? 'manual'
+  const shouldRunForAction = prSettings.updateMode === 'created_and_updated'
+    ? (action === 'created' || action === 'updated' || action === 'opened' || action === 'synchronize' || action === 'manual')
+    : (action === 'created' || action === 'opened' || action === 'manual')
+  const shouldUpdatePRDescription =
+    (opts.updatePRDescription ?? true) &&
+    prSettings.enabled &&
+    shouldRunForAction
+
+  await agent.postReview(prNumber, result, {
+    updatePRDescription: shouldUpdatePRDescription,
+    prDescription: {
+      publishMode: prSettings.publishMode,
+      preserveOriginal: prSettings.preserveOriginal,
+      useMarkers: prSettings.useMarkers,
+      publishLabels: prSettings.publishLabels,
+    },
+  })
 
   return {
     verdict: (result as any).verdict ?? 'unknown',
@@ -362,5 +666,16 @@ async function fetchDiffString(vcs: any, prNumber: number): Promise<string | nul
     ).join('\n')
   } catch {
     return null
+  }
+}
+
+async function fetchChangedPaths(vcs: any, prNumber: number): Promise<string[]> {
+  try {
+    const diff = await vcs.getDiff(prNumber)
+    return Array.isArray(diff.files)
+      ? diff.files.map((f: any) => String(f.path ?? '').replace(/^\//, '')).filter(Boolean)
+      : []
+  } catch {
+    return []
   }
 }
