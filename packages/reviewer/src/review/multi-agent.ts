@@ -467,23 +467,42 @@ async function runSingleAgent(
   role: AgentRole,
 ): Promise<AgentOutput> {
   const started = Date.now();
+
+  // Fork a per-agent explorer from the session explorer (shares cache, fresh stats)
+  const agentExplorer = context.symbolExplorer?.fork();
+  if (process.env.TOOL_DEBUG === 'true') {
+    console.log(`[multi-agent] ${role}: symbolExplorer=${!!context.symbolExplorer} agentExplorer=${!!agentExplorer}`);
+  }
+  const agentContext: ReviewContext = {
+    ...context,
+    agentRole: role,
+    agentDirective: AGENT_DIRECTIVES[role],
+    symbolExplorer: agentExplorer,
+  };
+
   try {
-    const result = await llm.generateReview({
-      ...context,
-      agentRole: role,
-      agentDirective: AGENT_DIRECTIVES[role],
-    }, AGENT_TEMPERATURE[role]);
+    const result = await llm.generateReview(agentContext, AGENT_TEMPERATURE[role]);
     // Dedup within this agent's output before sending to the Judge.
     // Prevents a single agent from producing 3 near-identical variants of the same finding.
     const rawComments = result.comments.map(c => ({ ...c, sourceAgent: role }));
     const comments = themeDedupeComments(rawComments);
     const output: ReviewResult = { ...result, comments };
+    const toolStats = agentExplorer?.getStats();
+    if (process.env.TOOL_DEBUG === 'true') {
+      console.log(`[multi-agent] ${role} stats: ${JSON.stringify(toolStats)}`);
+    }
     const telemetry: AgentTelemetry = {
       role,
       durationMs: Date.now() - started,
       commentCount: comments.length,
       verdict: output.verdict,
       tokensUsed: result.tokensUsed,
+      ...(toolStats && toolStats.totalCalls > 0 && {
+        toolCalls: toolStats.totalCalls,
+        toolCacheHits: toolStats.cacheHits,
+        toolRounds: toolStats.rounds,
+        toolBreakdown: toolStats.breakdown,
+      }),
     };
     return { role, result: output, telemetry };
   } catch (error: any) {

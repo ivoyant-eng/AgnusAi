@@ -43,6 +43,8 @@ export { detectSplit } from './review/split-detector';
 export { loadBestPractices } from './review/best-practices-loader';
 export { dispatch as dispatchCommand, COMMAND_REGISTRY } from './commands';
 export type { CommandContext, CommandIntent, CommandResult, CommandDescriptor } from './commands/types';
+export { ToolCallCache, SymbolExplorer } from './tools';
+export type { SymbolGraph, ToolStats } from './tools';
 
 import { VCSAdapter } from './adapters/vcs/base';
 import { TicketAdapter } from './adapters/ticket/base';
@@ -50,6 +52,7 @@ import { LLMBackend } from './llm/base';
 import { SkillLoader } from './skills/loader';
 import { ReviewContext, ReviewResult, ReviewComment, Diff, Config, ReviewCheckpoint, IncrementalReviewOptions } from './types';
 import type { GraphReviewContext } from '@agnus-ai/shared';
+import type { SymbolExplorer } from './tools/SymbolExplorer';
 import { GitHubAdapter } from './adapters/vcs/github';
 import {
   findCheckpointComment,
@@ -181,7 +184,8 @@ export class PRReviewAgent {
   async incrementalReview(
     prId: string | number,
     options: IncrementalReviewOptions = {},
-    graphContext?: GraphReviewContext
+    graphContext?: GraphReviewContext,
+    symbolExplorer?: SymbolExplorer,
   ): Promise<ReviewResult> {
     // Reset checkpoint flag for new review
     this.checkpointHandled = false;
@@ -262,6 +266,7 @@ export class PRReviewAgent {
       skills: applicableSkills,
       config: this.config.review,
       graphContext,
+      symbolExplorer,
     };
 
     // Run review (single-agent or specialist orchestration)
@@ -358,7 +363,7 @@ export class PRReviewAgent {
     }
   }
 
-  async review(prId: string | number, graphContext?: GraphReviewContext): Promise<ReviewResult> {
+  async review(prId: string | number, graphContext?: GraphReviewContext, symbolExplorer?: SymbolExplorer): Promise<ReviewResult> {
     // Reset checkpoint flag for new review
     this.checkpointHandled = false;
 
@@ -433,6 +438,7 @@ export class PRReviewAgent {
       config: this.config.review,
       graphContext,
       bestPractices,
+      symbolExplorer,
     };
 
     // 5. Run review (single-agent or specialist orchestration)
