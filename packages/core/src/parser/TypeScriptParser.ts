@@ -27,8 +27,67 @@ export class TypeScriptParser extends TreeSitterParser {
     const tree = this.parserInstance.parse(content)
     const symbols: ParsedSymbol[] = []
     const edges: Edge[] = []
-    walkNode(tree.rootNode, filePath, repoId, symbols, edges, null)
+    const importedNames = collectImportedNames(tree.rootNode)
+    walkNode(tree.rootNode, filePath, repoId, symbols, edges, null, importedNames)
     return { symbols, edges }
+  }
+}
+
+/** Collect all locally-bound names introduced by import statements in this file. */
+function collectImportedNames(root: SyntaxNode): Set<string> {
+  const names = new Set<string>()
+  for (const node of root.namedChildren) {
+    if (node.type !== 'import_statement') continue
+    for (const child of node.namedChildren) {
+      if (child.type === 'import_clause') {
+        // default import: import Foo from '...'
+        const defaultId = child.namedChildren.find(c => c.type === 'identifier')
+        if (defaultId) names.add(defaultId.text)
+        // named imports: import { A, B as C } from '...'
+        const namedImports = child.namedChildren.find(c => c.type === 'named_imports')
+        if (namedImports) {
+          for (const spec of namedImports.namedChildren) {
+            if (spec.type === 'import_specifier') {
+              const alias = spec.childForFieldName('alias')
+              const name = spec.childForFieldName('name')
+              const localName = alias ?? name
+              if (localName) names.add(localName.text)
+            }
+          }
+        }
+        // namespace import: import * as Ns from '...'
+        const nsImport = child.namedChildren.find(c => c.type === 'namespace_import')
+        if (nsImport) {
+          const id = nsImport.namedChildren.find(c => c.type === 'identifier')
+          if (id) names.add(id.text)
+        }
+      }
+    }
+  }
+  return names
+}
+
+/**
+ * Walk a symbol's body and emit 'uses' edges for any identifier that matches
+ * a name imported by this file. Deduplicates via `seen` so only one edge per
+ * (fromId, importedName) pair is emitted.
+ */
+function extractUses(
+  node: SyntaxNode,
+  fromId: string,
+  importedNames: Set<string>,
+  seen: Set<string>,
+  edges: Edge[],
+): void {
+  if (node.type === 'identifier' && importedNames.has(node.text)) {
+    const key = `${fromId}::${node.text}`
+    if (!seen.has(key)) {
+      seen.add(key)
+      edges.push({ from: fromId, to: node.text, kind: 'uses' })
+    }
+  }
+  for (const child of node.namedChildren) {
+    extractUses(child, fromId, importedNames, seen, edges)
   }
 }
 
@@ -39,6 +98,7 @@ function walkNode(
   symbols: ParsedSymbol[],
   edges: Edge[],
   classCtx: string | null,
+  importedNames: Set<string> = new Set(),
 ): void {
   switch (node.type) {
     case 'class_declaration':
@@ -69,7 +129,7 @@ function walkNode(
         const body = node.childForFieldName('body')
         if (body) {
           for (const c of body.namedChildren) {
-            walkNode(c, filePath, repoId, symbols, edges, qn)
+            walkNode(c, filePath, repoId, symbols, edges, qn, importedNames)
           }
         }
         return
@@ -100,13 +160,15 @@ function walkNode(
         const params = node.childForFieldName('parameters')
         const retType = node.childForFieldName('return_type')
         const sig = `function ${name}${params ? params.text : '()'}${retType ? `: ${retType.text}` : ''}`
+        const symId = makeSymbolId(filePath, qn)
         symbols.push({
-          id: makeSymbolId(filePath, qn), filePath, name, qualifiedName: qn,
+          id: symId, filePath, name, qualifiedName: qn,
           kind: 'function', signature: sig,
           bodyRange: [node.startPosition.row + 1, node.endPosition.row + 1],
           repoId,
         })
-        extractCalls(node, makeSymbolId(filePath, qn), edges)
+        extractCalls(node, symId, edges)
+        extractUses(node, symId, importedNames, new Set(), edges)
         return
       }
       break
@@ -120,13 +182,15 @@ function walkNode(
         const params = node.childForFieldName('parameters')
         const retType = node.childForFieldName('return_type')
         const sig = `${name}${params ? params.text : '()'}${retType ? `: ${retType.text}` : ''}`
+        const symId = makeSymbolId(filePath, qn)
         symbols.push({
-          id: makeSymbolId(filePath, qn), filePath, name, qualifiedName: qn,
+          id: symId, filePath, name, qualifiedName: qn,
           kind: 'method', signature: sig,
           bodyRange: [node.startPosition.row + 1, node.endPosition.row + 1],
           repoId,
         })
-        extractCalls(node, makeSymbolId(filePath, qn), edges)
+        extractCalls(node, symId, edges)
+        extractUses(node, symId, importedNames, new Set(), edges)
         return
       }
       break
@@ -167,7 +231,9 @@ function walkNode(
               bodyRange: [node.startPosition.row + 1, node.endPosition.row + 1],
               repoId,
             })
-            extractCalls(valueNode, makeSymbolId(filePath, qn), edges)
+            const symId = makeSymbolId(filePath, qn)
+            extractCalls(valueNode, symId, edges)
+            extractUses(valueNode, symId, importedNames, new Set(), edges)
           }
         }
       }
@@ -189,7 +255,7 @@ function walkNode(
     node.type !== 'function_declaration' &&
     node.type !== 'method_definition') {
     for (const child of node.namedChildren) {
-      walkNode(child, filePath, repoId, symbols, edges, classCtx)
+      walkNode(child, filePath, repoId, symbols, edges, classCtx, importedNames)
     }
   }
 }

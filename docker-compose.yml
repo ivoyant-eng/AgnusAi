@@ -31,11 +31,18 @@ services:
       - REVIEW_MODE=${REVIEW_MODE:-single}
       - AGENT_CONCURRENCY=${AGENT_CONCURRENCY:-2}
       - ENABLED_AGENTS=${ENABLED_AGENTS:-}
+      # Symbol explorer tools
+      - TOOL_DEBUG=${TOOL_DEBUG:-false}
+      - AGENT_TOOL_MAX_ROUNDS=${AGENT_TOOL_MAX_ROUNDS:-}
       - JUDGE_ENABLED=${JUDGE_ENABLED:-true}
       - JUDGE_MODE=${JUDGE_MODE:-llm}
       - SELF_REFLECTION_ENABLED=${SELF_REFLECTION_ENABLED:-false}
       - SELF_REFLECTION_THRESHOLD=${SELF_REFLECTION_THRESHOLD:-7}
       - PRECISION_THRESHOLD=${PRECISION_THRESHOLD:-0.7}
+      # @ryv command system
+      - RYV_BOT_NAME=${RYV_BOT_NAME:-ryv}
+      - COMMANDS_ENABLED=${COMMANDS_ENABLED:-true}
+      - COMMAND_MAX_PER_HOUR=${COMMAND_MAX_PER_HOUR:-10}
       # Rules system
       - RULES_SYSTEM_ENABLED=${RULES_SYSTEM_ENABLED:-true}
       - PUBLIC_URL=${PUBLIC_URL:-https://agnusai.platformnx.com}

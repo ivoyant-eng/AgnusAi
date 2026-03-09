@@ -1,5 +1,6 @@
 // Core types for the PR Review Agent
 import type { GraphReviewContext } from '@agnus-ai/shared'
+import type { SymbolExplorer } from './tools/SymbolExplorer'
 
 export interface PullRequest {
   id: string;
@@ -95,6 +96,12 @@ export interface ReviewContext {
   agentDirective?: string;
   /** Concatenated content from .agnus/best_practices.md files */
   bestPractices?: string;
+  /**
+   * Symbol explorer for tool-augmented agents.
+   * When present, agents can call get_symbol_body / find_callers / find_callees / read_file.
+   * Each agent should receive its own fork() sharing a session-level ToolCallCache.
+   */
+  symbolExplorer?: SymbolExplorer;
 }
 
 export const AGENT_ROLES = [
@@ -119,6 +126,14 @@ export interface AgentTelemetry {
   verdict: ReviewResult['verdict'];
   tokensUsed?: number;
   error?: string;
+  /** Total tool calls made by this agent (0 if tools not used) */
+  toolCalls?: number;
+  /** Cache hits within this agent's tool calls */
+  toolCacheHits?: number;
+  /** Tool call rounds (LLM ↔ tool back-and-forth trips) */
+  toolRounds?: number;
+  /** Per-tool breakdown */
+  toolBreakdown?: { tool: string; calls: number; cacheHits: number }[];
 }
 
 export interface AgentOutput {
@@ -153,6 +168,8 @@ export interface ReviewResult {
   tokensUsed?: number;
   /** PR splitting recommendation, populated when SPLIT_DETECTION_ENABLED and heuristics fire */
   splitSuggestion?: SplitSuggestion;
+  /** Aggregate PR quality score 0–100. 100 = no issues, lower = more/higher-severity findings. */
+  prScore?: number;
 }
 
 export type PRChangeType = 'bug' | 'feature' | 'refactor' | 'docs' | 'tests' | 'chore';

@@ -6,6 +6,7 @@ import crypto from 'crypto'
 import path from 'path'
 import { PRReviewAgent, GitHubAdapter, AzureDevOpsAdapter, createBackendFromEnv, JiraAdapter, LinearAdapter, AzureBoardsAdapter, GitHubIssuesAdapter } from '@agnus-ai/reviewer'
 import type { Config } from '@agnus-ai/reviewer'
+import { ToolCallCache, SymbolExplorer } from '@agnus-ai/reviewer'
 import type { Pool } from 'pg'
 
 // Skills bundled with the reviewer package
@@ -160,7 +161,7 @@ async function resolveApplicableRules(
   return candidates.filter(rule => isRuleApplicable(rule, repoId, changedPaths))
 }
 
-export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; comments?: any[] }> {
+export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; comments?: any[] }> {
   const { platform, repoId, repoUrl, prNumber, token, pool } = opts
 
   // 1. Build VCS adapter
@@ -241,7 +242,7 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
   return result
 }
 
-async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; comments?: any[] }> {
+async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; comments?: any[] }> {
   const { platform, repoId, prNumber, baseBranch } = opts
 
   const config: Config = {
@@ -339,9 +340,21 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
 
   // Assemble graph context from the base branch's graph (gracefully degraded if not indexed)
   let graphContext: GraphReviewContext | undefined
+  let symbolExplorer: SymbolExplorer | undefined
   const entry = getRepo(repoId, baseBranch)
   if (entry && diffString) {
     graphContext = await entry.retriever.getReviewContext(diffString, repoId)
+    // Build symbol explorer for tool-augmented agents (reads from cloned repo on disk)
+    const repoPathRow = await pool.query<{ repo_path: string }>(
+      'SELECT repo_path FROM repos WHERE repo_id = $1 LIMIT 1',
+      [repoId],
+    )
+    const repoPath = repoPathRow.rows[0]?.repo_path
+    if (repoPath) {
+      const sessionCache = new ToolCallCache()
+      symbolExplorer = new SymbolExplorer(entry.graph as any, repoPath, await buildDiff(vcs, prNumber), sessionCache)
+      console.log(`[tools] SymbolExplorer ready — graph has ${entry.graph.getAllSymbols().length} symbols, repoPath=${repoPath}`)
+    }
   }
 
   // Retrieve prior accepted + rejected comments via embedding similarity (RAG)
@@ -425,8 +438,8 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
   }
 
   const result = opts.incrementalReview && platform === 'github'
-    ? await agent.incrementalReview(prNumber, {}, graphContext)
-    : await agent.review(prNumber, graphContext)
+    ? await agent.incrementalReview(prNumber, {}, graphContext, symbolExplorer)
+    : await agent.review(prNumber, graphContext, symbolExplorer)
   const agentTelemetry = Array.isArray((result as any).agentTelemetry)
     ? (result as any).agentTelemetry
     : []
@@ -441,6 +454,23 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
           error: t.error ?? null,
         })),
       )}`,
+    )
+  }
+
+  // Tool call session summary
+  const toolAgents = agentTelemetry.filter((t: any) => (t.toolCalls ?? 0) > 0)
+  if (toolAgents.length > 0) {
+    const totalCalls = toolAgents.reduce((s: number, t: any) => s + (t.toolCalls ?? 0), 0)
+    const totalHits = toolAgents.reduce((s: number, t: any) => s + (t.toolCacheHits ?? 0), 0)
+    const hitRate = totalCalls > 0 ? Math.round((totalHits / totalCalls) * 100) : 0
+    const agentLines = toolAgents.map((t: any) => {
+      const breakdown = (t.toolBreakdown ?? []).map((b: any) => `${b.tool}×${b.calls}`).join(', ')
+      return `  ${t.role}: ${t.toolCalls} calls (${t.toolCacheHits} cache hits, ${t.toolRounds} rounds)${breakdown ? ' — ' + breakdown : ''}`
+    })
+    console.log(
+      `[tools] PR ${prNumber} session — ${toolAgents.length} agent(s) used tools:\n` +
+      agentLines.join('\n') +
+      `\n  Total: ${totalCalls} calls, ${totalHits} cache hits (${hitRate}% hit rate)`,
     )
   }
 
@@ -497,9 +527,16 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
 
   // Dry-run: skip DB writes and posting — return comments for inspection
   if (opts.dryRun) {
+    if (process.env.TOOL_DEBUG === 'true') {
+      console.log('[review-runner] dry-run agentTelemetry tool fields:', JSON.stringify(agentTelemetry.map((t: any) => ({ role: t.role, toolCalls: t.toolCalls, cacheHits: t.toolCacheHits }))))
+    }
+    const dryToolAgents = agentTelemetry.filter((t: any) => (t.toolCalls ?? 0) > 0)
+    const totalToolCalls = dryToolAgents.reduce((s: number, t: any) => s + (t.toolCalls ?? 0), 0)
+    const totalCacheHits = dryToolAgents.reduce((s: number, t: any) => s + (t.toolCacheHits ?? 0), 0)
     return {
       verdict: (result as any).verdict ?? 'unknown',
       commentCount: comments.length,
+      prScore: (result as any).prScore ?? null,
       reviewId,
       comments: comments.map((c: any) => ({
         path: c.path,
@@ -509,6 +546,20 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
         sourceAgent: c.sourceAgent ?? null,
         body: c.body,
       })),
+      ...(totalToolCalls > 0 && {
+        toolTelemetry: {
+          totalCalls: totalToolCalls,
+          totalCacheHits,
+          hitRate: totalToolCalls > 0 ? Math.round((totalCacheHits / totalToolCalls) * 100) : 0,
+          agents: dryToolAgents.map((t: any) => ({
+            role: t.role,
+            calls: t.toolCalls,
+            cacheHits: t.toolCacheHits,
+            rounds: t.toolRounds,
+            breakdown: t.toolBreakdown,
+          })),
+        },
+      }),
     }
   }
 
@@ -682,6 +733,14 @@ async function fetchDiffString(vcs: any, prNumber: number): Promise<string | nul
     ).join('\n')
   } catch {
     return null
+  }
+}
+
+async function buildDiff(vcs: any, prNumber: number): Promise<import('@agnus-ai/reviewer').Diff> {
+  try {
+    return await vcs.getDiff(prNumber)
+  } catch {
+    return { files: [], additions: 0, deletions: 0, changedFiles: 0 }
   }
 }
 
