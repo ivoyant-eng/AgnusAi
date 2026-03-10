@@ -170,6 +170,26 @@ curl http://localhost:3000/health
 # {"status":"ok","timestamp":"..."}
 ```
 
+## Production Deployment
+
+Use the prod overlay (`docker-compose.prod.yml`) which adds Traefik with TLS, and pass your production env file:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up -d
+```
+
+The prod overlay adds Traefik routing rules and TLS termination on top of the base stack. Make sure:
+- `PUBLIC_URL` in `.env.production` is set to your actual domain
+- TLS certs are in place at `/etc/nginx/ssl/` on the host (Traefik mounts them read-only)
+- The `postgres-data` volume doesn't exist yet on a fresh server — Postgres will initialize with the credentials from `.env.production` on first boot
+
+To update in production:
+
+```bash
+git pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.production up --build -d
+```
+
 ## Updating
 
 ```bash
