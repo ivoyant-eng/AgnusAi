@@ -37,6 +37,7 @@
     "@ai-sdk/azure": "^3.0.34",
     "@ai-sdk/openai": "^3.0.33",
     "@ai-sdk/openai-compatible": "^2.0.30",
+    "@octokit/auth-app": "^7.0.0",
     "@octokit/rest": "^20.0.2",
     "ai": "^6.0.91",
     "commander": "^11.1.0",

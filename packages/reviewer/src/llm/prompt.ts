@@ -2,6 +2,7 @@
 
 import type { GraphReviewContext } from '@agnus-ai/shared';
 import { ReviewContext, Diff, ReviewResult } from '../types';
+import { SymbolExplorer } from '../tools/SymbolExplorer';
 
 export function buildReviewPrompt(context: ReviewContext): string {
   const { pr, diff, skills, config, graphContext } = context;
@@ -16,7 +17,7 @@ export function buildReviewPrompt(context: ReviewContext): string {
     ? `\n## Team Best Practices\nApply these team-specific guidelines when reviewing this PR:\n\n${context.bestPractices}\n`
     : '';
 
-  const graphSection = graphContext ? serializeGraphContext(graphContext) : '';
+  const graphSection = graphContext ? serializeGraphContext(graphContext, context.symbolExplorer) : '';
 
   const examplesSection = (graphContext?.priorExamples?.length)
     ? `\n## Examples of feedback your team found helpful\n` +
@@ -57,6 +58,35 @@ export function buildReviewPrompt(context: ReviewContext): string {
     ? `\n## Specialist Role\nRole: ${agentRole}\n${agentDirective ?? ''}\n`
     : '';
 
+  // Context manifest — tells the agent exactly what data it has so it stops hedging.
+  const totalAdded = diff.files.reduce((s, f) => s + f.additions, 0);
+  const totalRemoved = diff.files.reduce((s, f) => s + f.deletions, 0);
+  const toolsSuffix = context.symbolExplorer ? ', symbol explorer tools available (get_symbol_body, find_callers, find_callees, read_file)' : ''
+  const graphManifestLine = graphContext
+    ? `- Symbol graph: ${graphContext.changedSymbols.length} changed symbols, ` +
+      `${graphContext.callers.length} direct callers, ${graphContext.callees.length} direct callees, ` +
+      `blast radius risk score ${graphContext.blastRadius?.riskScore ?? 0}/100${toolsSuffix}`
+    : '- Symbol graph: not available (repo not indexed)';
+  const ticketManifestLine = (context.tickets?.length ?? 0) > 0
+    ? `- Linked tickets: ${context.tickets.map(t => t.key).join(', ')}`
+    : '- Linked tickets: none';
+  const rulesManifestLine = (graphContext?.enforcedRules?.length ?? 0) > 0
+    ? `- Enforced rules: ${graphContext!.enforcedRules!.length} active`
+    : '- Enforced rules: none';
+  const examplesManifestLine = (graphContext?.priorExamples?.length ?? 0) > 0
+    ? `- Team feedback examples: ${graphContext!.priorExamples!.length} accepted, ` +
+      `${graphContext?.rejectedExamples?.length ?? 0} rejected`
+    : '';
+  const contextManifest = [
+    '\n## Context Available to You',
+    `- Diff: ${diff.files.length} changed files (+${totalAdded}/-${totalRemoved} lines)`,
+    graphManifestLine,
+    ticketManifestLine,
+    rulesManifestLine,
+    ...(examplesManifestLine ? [examplesManifestLine] : []),
+    '\nYou MUST use all available context above. Do not claim you lack context if it is listed here.',
+  ].join('\n');
+
   const ticketsSection = (context.tickets && context.tickets.length > 0)
     ? `\n## Linked Tickets\n` +
       context.tickets.map(t =>
@@ -88,12 +118,19 @@ ${fileList}
 ${diffResult.content}
 ${graphSection}${bestPracticesSection}${skillContext}${examplesSection}${rejectedSection}${rulesSection}
 ${truncationWarning}${roleSection}
+${contextManifest}
 
 ## Review Instructions
 1. Analyse the diff for issues: correctness, security, performance, maintainability
 2. Reference exact file paths and line numbers from the diff
 3. Focus on real issues, not nitpicks
 4. For each issue provide: severity, concrete impacts, a code suggestion, reproduction steps
+
+Before submitting your review, verify each of these:
+- [ ] I checked every caller listed in the Codebase Context for impacts from the changed symbols
+- [ ] I verified each Linked Ticket acceptance criterion against the diff (if tickets present)
+- [ ] I checked each Enforced Rule against the changed code (if rules present)
+- [ ] Every comment I am posting has a specific line reference and is not speculative
 
 ## Output Format
 
@@ -158,12 +195,14 @@ RULES:
 - You may use <details>/<summary> for collapsible sections. Inside <details> blocks, use only plain text and bullet lists — never triple-backtick code fences inside <details> as they break rendering on Azure DevOps and other platforms.
 - If the PR looks good output VERDICT: approve with no comments
 - NEVER comment on whether a specific package/library version number is valid, exists, or is outdated. Your training data has a knowledge cutoff and package versions change constantly — you will be wrong. Skip ALL observations about version numbers, semver ranges, or whether a version is "the latest". Focus only on code logic, patterns, and correctness.
+- NEVER write vague advisory comments like "ensure compatibility", "verify this works", "check the documentation", "test thoroughly", or "this may have breaking changes" — these are noise. Only comment if you can point to a specific line of code that will break and explain exactly why.
+- NEVER comment on lock files (pnpm-lock.yaml, package-lock.json, yarn.lock, go.sum, etc.) — they are auto-generated. If the only changed files are lock files and package.json version bumps, output VERDICT: approve with no comments.
 - NEVER mention "blast radius", "graph context", "codebase context", or any internal tooling concepts in your review comments. Use the codebase context section only to understand impact — your comments must read as if written by a human reviewer who knows the codebase.
 - UI Permission Attribution: When flagging a missing permission check on a UI element (button, action, menu item), reference the line where the disabled/enabled prop (e.g. \`buttonDisabled\`, \`disabled\`, \`isDisabled\`) is set in the render config — NOT the callback function it invokes. The callback is irrelevant to the authorization gap; the unconditional prop is the finding.
 - UI Permission Consistency: If context lines show sibling buttons or actions in the same list/array where some apply \`hasPermission()\`, \`can()\`, or similar guards on their disabled state and others do not, flag the ungated element. A hardcoded \`buttonDisabled: false\` next to a properly-gated sibling is an access control bug.`;
 }
 
-export function serializeGraphContext(ctx: GraphReviewContext): string {
+export function serializeGraphContext(ctx: GraphReviewContext, explorer?: SymbolExplorer): string {
   const lines: string[] = [
     '\n## Codebase Context (internal — do NOT mention this section or any tooling names in your review output)',
     'Use this context silently to understand the impact of the changes. Do not reference "blast radius", "graph", or any internal tool terminology in your comments.\n',
@@ -213,15 +252,109 @@ export function serializeGraphContext(ctx: GraphReviewContext): string {
     }
   }
 
+  if (explorer) {
+    lines.push('\n' + SymbolExplorer.toolDescriptionPrompt());
+  }
+
   return lines.join('\n') + '\n';
+}
+
+/**
+ * Renders a Mermaid flowchart from a GraphReviewContext for inclusion in PR descriptions.
+ * Shows: changed symbols (centre) ← callers (left) and → callees (right).
+ * Capped at 15 nodes total to keep diagrams readable.
+ */
+export function serializeMermaidGraph(ctx: GraphReviewContext): string {
+  function sanitizeId(raw: string): string {
+    return raw.replace(/[^a-zA-Z0-9_]/g, '_').slice(0, 40);
+  }
+  function shortLabel(qualifiedName: string): string {
+    const trimmed = qualifiedName.length > 32 ? qualifiedName.slice(0, 29) + '...' : qualifiedName;
+    // Escape quotes for Mermaid node labels
+    return trimmed.replace(/"/g, "'");
+  }
+
+  const nodeLines: string[] = [];
+  const edgeLines: string[] = [];
+  const seenNodes = new Set<string>();
+
+  function addNode(id: string, label: string, shape: 'changed' | 'caller' | 'callee') {
+    if (seenNodes.has(id)) return;
+    seenNodes.add(id);
+    if (shape === 'changed') {
+      nodeLines.push(`  ${id}["⬅ ${label}"]`);
+    } else {
+      nodeLines.push(`  ${id}["${label}"]`);
+    }
+  }
+
+  const changed = ctx.changedSymbols.slice(0, 5);
+  const callers = ctx.callers.slice(0, 5);
+  const callees = ctx.callees.slice(0, 5);
+
+  for (const sym of changed) {
+    addNode(`C_${sanitizeId(sym.id)}`, shortLabel(sym.qualifiedName), 'changed');
+  }
+  for (const caller of callers) {
+    const nodeId = `K_${sanitizeId(caller.id)}`;
+    addNode(nodeId, shortLabel(caller.qualifiedName), 'caller');
+    for (const ch of changed.slice(0, 3)) {
+      edgeLines.push(`  ${nodeId} --> C_${sanitizeId(ch.id)}`);
+    }
+  }
+  for (const callee of callees) {
+    const nodeId = `E_${sanitizeId(callee.id)}`;
+    addNode(nodeId, shortLabel(callee.qualifiedName), 'callee');
+    for (const ch of changed.slice(0, 3)) {
+      edgeLines.push(`  C_${sanitizeId(ch.id)} --> ${nodeId}`);
+    }
+  }
+
+  if (seenNodes.size === 0) return '';
+
+  const diagram = [
+    '```mermaid',
+    'flowchart LR',
+    ...nodeLines,
+    ...edgeLines,
+    '```',
+  ].join('\n');
+
+  return `\n<details>\n<summary>Call graph</summary>\n\n${diagram}\n\n</details>\n`;
+}
+
+/** Files that are auto-generated or carry no reviewable logic — excluded from LLM diff. */
+const SKIP_FILE_PATTERNS = [
+  /^pnpm-lock\.yaml$/,
+  /^package-lock\.json$/,
+  /^yarn\.lock$/,
+  /^bun\.lockb$/,
+  /^composer\.lock$/,
+  /^Gemfile\.lock$/,
+  /^Pipfile\.lock$/,
+  /^poetry\.lock$/,
+  /^go\.sum$/,
+  /^Cargo\.lock$/,
+  /\.tsbuildinfo$/,
+  /\.snap$/, // jest snapshots
+]
+
+export function shouldSkipFile(path: string): boolean {
+  const base = path.split('/').pop() ?? path
+  return SKIP_FILE_PATTERNS.some(p => p.test(base) || p.test(path))
 }
 
 export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { content: string; truncated: boolean; truncatedCount: number } {
   let content = '';
   let currentSize = 0;
+  const reviewableFiles = diff.files.filter(f => !shouldSkipFile(f.path));
+  const skippedCount = diff.files.length - reviewableFiles.length;
+  if (skippedCount > 0) {
+    content += `[${skippedCount} generated/lock file(s) excluded from review]\n`;
+  }
 
-  for (let i = 0; i < diff.files.length; i++) {
-    const file = diff.files[i];
+  for (let i = 0; i < reviewableFiles.length; i++) {
+    const file = reviewableFiles[i];
     const hunksWithHeaders = file.hunks
       .map(h => {
         // Annotate each + line with its explicit new-file line number.
@@ -247,7 +380,7 @@ export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { conten
     const fileDiff = `--- ${file.path}\n+++ ${file.path}\n${hunksWithHeaders}\n`;
 
     if (currentSize + fileDiff.length > maxChars) {
-      const truncatedCount = diff.files.length - i;
+      const truncatedCount = reviewableFiles.length - i;
       content += `\n... [Diff truncated — ${truncatedCount} more files]`;
       return { content, truncated: true, truncatedCount };
     }
@@ -311,7 +444,7 @@ ${diffResult.content}
 ## Review Signal (for context)
 Summary: ${review.summary}
 Verdict: ${review.verdict}
-Comment Count: ${review.comments.length}
+Comment Count: ${review.comments.length}${review.prScore !== undefined ? `\nPR Quality Score: ${review.prScore}/100` : ''}
 
 ## Task
 Generate:

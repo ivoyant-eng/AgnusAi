@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify'
 import type { Pool } from 'pg'
 import { getOrLoadRepo } from '../graph-cache'
 import { runReview } from '../review-runner'
+import { resolveCloneToken, buildAuthenticatedUrl } from '../git-utils'
 import {
   normalizeGithubEvent,
   normalizeAzureEvent,
@@ -12,6 +13,7 @@ import {
   type PREvent,
 } from '../pr-event'
 import { runAsk } from '../ask-runner'
+import { runCommand } from '../command-runner'
 
 const execAsync = promisify(exec)
 
@@ -97,10 +99,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const repoId = await resolveRepoId(repoUrl, orgSlug)
     if (!repoId) return reply.status(200).send({ ok: true })
 
-    // /ask command — intercept issue_comment before PR event normalization
+    // @ryv / /ask command — intercept issue_comment before PR event normalization
     if (event === 'issue_comment' && payload.action === 'created') {
-      const result = await handleAskCommand(payload, repoId, repoUrl, pool, 'github')
-      if (result) return reply.status(202).send({ status: 'ask accepted' })
+      const result = await handleRyvCommand(payload, repoId, repoUrl, pool, 'github')
+      if (result) return reply.status(202).send({ status: 'command accepted' })
     }
 
     const prEvent = await normalizeGithubEvent(event, payload, repoId, repoUrl, pool)
@@ -147,10 +149,10 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
     const repoId = await resolveRepoId(repoUrl)
     if (!repoId) return reply.status(200).send({ ok: true })
 
-    // /ask command — intercept issue_comment before PR event normalization
+    // @ryv / /ask command — intercept issue_comment before PR event normalization
     if (event === 'issue_comment' && payload.action === 'created') {
-      const result = await handleAskCommand(payload, repoId, repoUrl, pool, 'github')
-      if (result) return reply.status(202).send({ status: 'ask accepted' })
+      const result = await handleRyvCommand(payload, repoId, repoUrl, pool, 'github')
+      if (result) return reply.status(202).send({ status: 'command accepted' })
     }
 
     const prEvent = await normalizeGithubEvent(event, payload, repoId, repoUrl, pool)
@@ -176,43 +178,51 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   })
 }
 
-// ─── /ask command handler ─────────────────────────────────────────────────────
+// ─── @ryv / /ask command handler ─────────────────────────────────────────────
 
-const ASK_ENABLED = (process.env.ASK_ENABLED ?? 'true').toLowerCase() !== 'false'
+const RYV_BOT_NAME = process.env.RYV_BOT_NAME ?? 'ryv'
+const COMMANDS_ENABLED = (process.env.COMMANDS_ENABLED ?? 'true').toLowerCase() !== 'false'
 
-async function handleAskCommand(
+async function handleRyvCommand(
   payload: Record<string, unknown>,
   repoId: string,
   repoUrl: string,
   pool: Pool,
   platform: 'github' | 'azure',
 ): Promise<boolean> {
-  if (!ASK_ENABLED) return false
+  if (!COMMANDS_ENABLED) return false
 
   const body = (payload.comment as any)?.body?.trim() ?? ''
-  if (!body.startsWith('/ask ')) return false
+  const isRyvMention = body.includes(`@${RYV_BOT_NAME}`)
+  const isLegacyAsk  = body.startsWith('/ask ')
 
-  // Only respond to PR issue comments (not plain issue comments)
+  if (!isRyvMention && !isLegacyAsk) return false
+
+  // Only respond to PR issue comments (not plain issue comments on repos)
   const issue = payload.issue as any
   if (!issue?.pull_request) return false
 
-  const question = body.slice('/ask '.length).trim()
-  if (!question) return false
-
   const prNumber = issue.number as number
   const commentId = (payload.comment as any)?.id as number
-  const baseBranch = issue.pull_request?.base?.ref ?? 'main'
+  const baseBranch = (issue.pull_request as any)?.base?.ref ?? 'main'
 
-  const tokenRes = await pool.query<{ token: string | null }>(
-    'SELECT token FROM repos WHERE repo_id = $1',
-    [repoId],
-  )
-  const token = tokenRes.rows[0]?.token ?? undefined
+  const repoCreds = await getRepoCreds(pool, repoId)
+  const token = repoCreds.token
 
-  setImmediate(() =>
-    runAsk({ platform, repoId, repoUrl, prNumber, question, commentId, token, baseBranch, pool })
-      .catch(err => console.error('[ask-runner] Error:', (err as Error).message))
-  )
+  if (isLegacyAsk) {
+    // Backward-compatible: route /ask directly to ask handler, skip NLP
+    const question = body.slice('/ask '.length).trim()
+    if (!question) return false
+    setImmediate(() =>
+      runCommand({ platform, repoId, repoUrl, prNumber, commentId, token, baseBranch, rawBody: body, pool, forceCommand: 'ask' })
+        .catch(err => console.error('[command-runner] Error:', (err as Error).message))
+    )
+  } else {
+    setImmediate(() =>
+      runCommand({ platform, repoId, repoUrl, prNumber, commentId, token, baseBranch, rawBody: body, pool })
+        .catch(err => console.error('[command-runner] Error:', (err as Error).message))
+    )
+  }
   return true
 }
 
@@ -237,13 +247,18 @@ async function dispatchPREvent(event: PREvent, pool: Pool): Promise<void> {
       const { prNumber, baseBranch, prAction, incrementalDiff, incrementalReview } = kind
       setImmediate(async () => {
         try {
+          const repoCreds = await getRepoCreds(pool, repoId)
           await runReview({
             platform,
             repoId,
             repoUrl,
             prNumber,
             baseBranch,
-            token: await getRepoToken(pool, repoId),
+            token: repoCreds.token,
+            githubAppId: repoCreds.githubAppId,
+            githubAppPrivateKey: repoCreds.githubAppPrivateKey,
+            githubAppInstallationId: repoCreds.githubAppInstallationId,
+            vcsInstallationId: repoCreds.vcsInstallationId,
             pool,
             incrementalDiff,
             incrementalReview,
@@ -283,12 +298,20 @@ function verifySharedWebhookSecret(secret: string, provided?: string): boolean {
   }
 }
 
-async function getRepoToken(pool: Pool, repoId: string): Promise<string | undefined> {
-  const res = await pool.query<{ token: string | null }>(
-    'SELECT token FROM repos WHERE repo_id = $1',
+async function getRepoCreds(pool: Pool, repoId: string): Promise<{ token?: string; githubAppId?: string; githubAppPrivateKey?: string; githubAppInstallationId?: string; vcsInstallationId?: string }> {
+  const res = await pool.query<{ token: string | null; github_app_id: string | null; github_app_private_key: string | null; github_app_installation_id: string | null; vcs_installation_id: string | null }>(
+    'SELECT token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1',
     [repoId],
   )
-  return res.rows[0]?.token ?? undefined
+  const row = res.rows[0]
+  if (!row) return {}
+  return {
+    token: row.token ?? undefined,
+    githubAppId: row.github_app_id ?? undefined,
+    githubAppPrivateKey: row.github_app_private_key ?? undefined,
+    githubAppInstallationId: row.github_app_installation_id ?? undefined,
+    vcsInstallationId: row.vcs_installation_id ?? undefined,
+  }
 }
 
 /**
@@ -318,13 +341,34 @@ async function getChangedFilesFromGit(repoPath: string): Promise<string[]> {
  */
 async function runPushIndex(pool: Pool, repoId: string, branch: string, logPrefix: string): Promise<void> {
   try {
-    const repoPathRow = await pool.query<{ repo_path: string | null }>(
-      'SELECT repo_path FROM repos WHERE repo_id = $1', [repoId],
+    const repoRow = await pool.query<{
+      repo_path: string | null
+      repo_url: string | null
+      token: string | null
+      github_app_id: string | null
+      github_app_private_key: string | null
+      github_app_installation_id: string | null
+    }>(
+      'SELECT repo_path, repo_url, token, github_app_id, github_app_private_key, github_app_installation_id FROM repos WHERE repo_id = $1',
+      [repoId],
     )
-    const repoPath = repoPathRow.rows[0]?.repo_path ?? undefined
+    const repoMeta = repoRow.rows[0]
+    const repoPath = repoMeta?.repo_path ?? undefined
     if (!repoPath) {
       console.warn(`${logPrefix} No repo_path for ${repoId} — skipping index`)
       return
+    }
+
+    // Generate a fresh clone token — GitHub App installation tokens expire after 1 hour
+    const freshToken = await resolveCloneToken(
+      repoMeta?.github_app_id,
+      repoMeta?.github_app_private_key,
+      repoMeta?.github_app_installation_id,
+      repoMeta?.token,
+    )
+    if (freshToken && repoMeta?.repo_url) {
+      const freshUrl = buildAuthenticatedUrl(repoMeta.repo_url, freshToken)
+      await execAsync(`git -C "${repoPath}" remote set-url origin "${freshUrl}"`, { timeout: 10_000 }).catch(() => {})
     }
 
     // Check if an index exists

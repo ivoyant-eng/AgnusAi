@@ -16,7 +16,10 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm -r test",
-    "lint": "pnpm -r lint"
+    "lint": "pnpm -r lint",
+    "cleanup": "./scripts/cleanup.sh",
+    "cleanup:down": "./scripts/cleanup.sh --down",
+    "test:cleanup": "./scripts/test-cleanup.sh"
   },
   "devDependencies": {
     "typescript": "^5.3.0"

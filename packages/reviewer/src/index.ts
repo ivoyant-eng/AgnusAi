@@ -36,11 +36,15 @@ export * from './types';
 export { filterByConfidence, DEFAULT_PRECISION_CONFIG } from './review/precision-filter';
 export type { PrecisionFilterConfig, FilteredByConfidence } from './review/precision-filter';
 export { runReviewWithSpecialists } from './review/multi-agent';
-export { buildReviewPrompt, buildAskPrompt, buildPRDescriptionPrompt, serializeGraphContext } from './llm/prompt';
+export { buildReviewPrompt, buildAskPrompt, buildPRDescriptionPrompt, serializeGraphContext, serializeMermaidGraph } from './llm/prompt';
 export { validateSuggestions } from './review/suggestion-validator';
 export { runSelfReflection } from './review/self-reflection';
 export { detectSplit } from './review/split-detector';
 export { loadBestPractices } from './review/best-practices-loader';
+export { dispatch as dispatchCommand, COMMAND_REGISTRY } from './commands';
+export type { CommandContext, CommandIntent, CommandResult, CommandDescriptor } from './commands/types';
+export { ToolCallCache, SymbolExplorer } from './tools';
+export type { SymbolGraph, ToolStats } from './tools';
 
 import { VCSAdapter } from './adapters/vcs/base';
 import { TicketAdapter } from './adapters/ticket/base';
@@ -48,6 +52,7 @@ import { LLMBackend } from './llm/base';
 import { SkillLoader } from './skills/loader';
 import { ReviewContext, ReviewResult, ReviewComment, Diff, Config, ReviewCheckpoint, IncrementalReviewOptions } from './types';
 import type { GraphReviewContext } from '@agnus-ai/shared';
+import type { SymbolExplorer } from './tools/SymbolExplorer';
 import { GitHubAdapter } from './adapters/vcs/github';
 import {
   findCheckpointComment,
@@ -58,8 +63,26 @@ import { filterByConfidence } from './review/precision-filter';
 import { runReviewWithSpecialists } from './review/multi-agent';
 import { validateSuggestions, type ParseFn } from './review/suggestion-validator';
 import { runSelfReflection } from './review/self-reflection';
+import { consolidateFindings } from './review/consolidate';
 import { detectSplit, formatSplitSuggestion } from './review/split-detector';
 import { loadBestPractices } from './review/best-practices-loader';
+import { shouldSkipFile, serializeMermaidGraph } from './llm/prompt';
+
+/**
+ * Aggregate PR quality score 0–100.
+ * 100 = clean PR with no findings; lower = more or higher-severity issues found.
+ * Penalty = confidence × severityWeight per comment; normalised so 20 penalty points → score of 0.
+ */
+export function computePRScore(comments: ReviewComment[]): number {
+  if (comments.length === 0) return 100;
+  const weights: Record<string, number> = { error: 3, warning: 2, info: 1 };
+  const totalPenalty = comments.reduce((sum, c) => {
+    const confidence = c.confidence ?? 0.7;
+    const weight = weights[c.severity ?? 'info'] ?? 1;
+    return sum + confidence * weight;
+  }, 0);
+  return Math.max(0, Math.min(100, Math.round(100 - totalPenalty * 5)));
+}
 
 /**
  * Result of an incremental review check
@@ -103,6 +126,7 @@ export class PRReviewAgent {
   private skills: SkillLoader;
   private config: Config;
   private lastDiff: Diff | null = null;
+  private lastGraphContext: GraphReviewContext | null = null;
   private checkpointHandled: boolean = false;
 
   constructor(config: Config) {
@@ -160,7 +184,8 @@ export class PRReviewAgent {
   async incrementalReview(
     prId: string | number,
     options: IncrementalReviewOptions = {},
-    graphContext?: GraphReviewContext
+    graphContext?: GraphReviewContext,
+    symbolExplorer?: SymbolExplorer,
   ): Promise<ReviewResult> {
     // Reset checkpoint flag for new review
     this.checkpointHandled = false;
@@ -211,16 +236,18 @@ export class PRReviewAgent {
     const changedFilePaths = new Set(incrementalResult.diff.files.map(f => f.path));
     const relevantFiles = files.filter(f => changedFilePaths.has(f.path));
 
-    // Get linked tickets
-    const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
+    // Get linked tickets (opt-in — ticket integration is behind a feature flag)
     const tickets = [];
-    for (const adapter of this.tickets) {
-      for (const id of linkedTicketIds) {
-        try {
-          const ticket = await adapter.getTicket(id.key);
-          tickets.push(ticket);
-        } catch {
-          // Ticket not found
+    if (this.config.review?.ticketFetchEnabled) {
+      const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
+      for (const adapter of this.tickets) {
+        for (const id of linkedTicketIds) {
+          try {
+            const ticket = await adapter.getTicket(id.key);
+            tickets.push(ticket);
+          } catch {
+            // Ticket not found in this adapter
+          }
         }
       }
     }
@@ -239,6 +266,7 @@ export class PRReviewAgent {
       skills: applicableSkills,
       config: this.config.review,
       graphContext,
+      symbolExplorer,
     };
 
     // Run review (single-agent or specialist orchestration)
@@ -267,6 +295,15 @@ export class PRReviewAgent {
       console.log(`🎯 Precision filter: ${kept.length}/${result.comments.length} comments kept (threshold ${threshold})`);
     }
     result.comments = kept.length > 0 ? kept : result.comments.filter(c => c.confidence === undefined);
+
+    // Deterministic consolidation — region dedup + severity budget
+    result.comments = consolidateFindings(result.comments);
+
+    // Attach aggregate PR quality score
+    result.prScore = computePRScore(result.comments);
+
+    // Cache graph context for PR description generation
+    this.lastGraphContext = graphContext ?? null;
 
     // Add checkpoint marker to summary
     result.summary = `[Incremental Review: ${incrementalResult.diff.files.length} new files]\n\n${result.summary}`;
@@ -326,7 +363,7 @@ export class PRReviewAgent {
     }
   }
 
-  async review(prId: string | number, graphContext?: GraphReviewContext): Promise<ReviewResult> {
+  async review(prId: string | number, graphContext?: GraphReviewContext, symbolExplorer?: SymbolExplorer): Promise<ReviewResult> {
     // Reset checkpoint flag for new review
     this.checkpointHandled = false;
 
@@ -335,16 +372,37 @@ export class PRReviewAgent {
     const diff = await this.vcs.getDiff(prId);
     const files = await this.vcs.getFiles(prId);
 
-    // 2. Get linked tickets
-    const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
+    // 1b. Short-circuit: if every changed file is a lock/generated file or a
+    //     package manifest with only version-bump changes, skip the LLM entirely.
+    const MANIFEST_PATTERN = /^(package\.json|Cargo\.toml|pyproject\.toml|requirements.*\.txt|go\.mod|build\.gradle(\.kts)?|pom\.xml|\.csproj|pubspec\.yaml)$/;
+    const reviewableFiles = diff.files.filter(f => !shouldSkipFile(f.path));
+    const isDependencyOnlyPR = reviewableFiles.length > 0 &&
+      reviewableFiles.every(f => {
+        const base = f.path.split('/').pop() ?? f.path;
+        return MANIFEST_PATTERN.test(base) && (f.additions + f.deletions) <= 10;
+      });
+    if (isDependencyOnlyPR) {
+      console.log(`[review] Dependency-only PR detected (${reviewableFiles.map(f => f.path).join(', ')}) — auto-approving, no LLM call.`);
+      return {
+        summary: 'Only dependency version changes detected. No code logic was modified.',
+        comments: [],
+        suggestions: [],
+        verdict: 'approve',
+      };
+    }
+
+    // 2. Get linked tickets (opt-in — ticket integration is behind a feature flag)
     const tickets = [];
-    for (const adapter of this.tickets) {
-      for (const id of linkedTicketIds) {
-        try {
-          const ticket = await adapter.getTicket(id.key);
-          tickets.push(ticket);
-        } catch {
-          // Ticket not found in this adapter
+    if (this.config.review?.ticketFetchEnabled) {
+      const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
+      for (const adapter of this.tickets) {
+        for (const id of linkedTicketIds) {
+          try {
+            const ticket = await adapter.getTicket(id.key);
+            tickets.push(ticket);
+          } catch {
+            // Ticket not found in this adapter
+          }
         }
       }
     }
@@ -380,6 +438,7 @@ export class PRReviewAgent {
       config: this.config.review,
       graphContext,
       bestPractices,
+      symbolExplorer,
     };
 
     // 5. Run review (single-agent or specialist orchestration)
@@ -409,8 +468,15 @@ export class PRReviewAgent {
     }
     result.comments = kept.length > 0 ? kept : result.comments.filter(c => c.confidence === undefined);
 
-    // Cache diff for use in postReview path validation
+    // 7. Deterministic consolidation — region dedup + severity budget
+    result.comments = consolidateFindings(result.comments);
+
+    // Attach aggregate PR quality score
+    result.prScore = computePRScore(result.comments);
+
+    // Cache diff and graph context for PR description generation
     this.lastDiff = diff;
+    this.lastGraphContext = graphContext ?? null;
 
     return result;
   }
@@ -563,7 +629,13 @@ export class PRReviewAgent {
       return;
     }
 
-    let bodyToPublish = description.body;
+    // Append Mermaid call-graph diagram when graph context is available
+    const mermaidDiagram = this.lastGraphContext
+      ? serializeMermaidGraph(this.lastGraphContext)
+      : '';
+    let bodyToPublish = mermaidDiagram
+      ? `${description.body}\n${mermaidDiagram}`
+      : description.body;
     const markerStart = '<!-- AGNUSAI:START -->';
     const markerEnd = '<!-- AGNUSAI:END -->';
 
@@ -582,12 +654,21 @@ export class PRReviewAgent {
       bodyToPublish = `${pr.description.trim()}\n\n---\n\n## AgnusAI Description\n\n${description.body}`;
     }
 
+    // Append PR quality score label
+    const score = result.prScore;
+    const scoreLabel = score !== undefined
+      ? `quality: ${score}/100${score < 60 ? ' ⚠️' : ''}`
+      : null;
+    const labelsWithScore = publishLabels
+      ? [...description.labels, ...(scoreLabel ? [scoreLabel] : [])]
+      : [];
+
     await this.vcs.updatePRDescription!(prId, {
       ...description,
       body: bodyToPublish,
-      labels: publishLabels ? description.labels : []
+      labels: labelsWithScore,
     });
-    console.log(`📝 Updated PR title/body and labels (${publishLabels ? description.labels.length : 0} labels).`);
+    console.log(`📝 Updated PR title/body and labels (${labelsWithScore.length} labels, score=${score ?? 'n/a'}).`);
   }
 
   /**

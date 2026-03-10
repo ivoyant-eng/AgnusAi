@@ -101,6 +101,8 @@ Azure embeddings reuse `AZURE_API_VERSION` from the LLM section.
 | `JUDGE_MODE` | `llm` (when multi-agent on) | `llm` — LLM semantically deduplicates and selects the best findings (default when `MULTI_AGENT_ENABLED=true`). `deterministic` — fast rule-based dedup by location only, no extra LLM call. |
 | `SELF_REFLECTION_ENABLED` | `false` | Enable a second LLM pass that re-scores every surviving comment 0–10 based on evidence quality and drops those below `SELF_REFLECTION_THRESHOLD`. Reduces noise at the cost of one extra LLM call. |
 | `SELF_REFLECTION_THRESHOLD` | `5` | Minimum score (0–10) a comment must receive in the self-reflection pass to survive. `6` is recommended for stricter signal-to-noise. |
+| `AGENT_TOOL_MAX_ROUNDS` | _(adaptive)_ | Max tool-call rounds per agent. Defaults: ≤3 files→3, 4–10 files→4, >10 files→5. Set to a fixed number to override. |
+| `TOOL_DEBUG` | `false` | Log every agent tool call and round to stdout. Useful for verifying agents are using exploration tools. |
 
 See [Multi-Agent Review](/reference/multi-agent) for full details.
 

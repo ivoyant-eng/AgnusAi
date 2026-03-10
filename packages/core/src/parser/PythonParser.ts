@@ -27,9 +27,57 @@ export class PythonParser extends TreeSitterParser {
     const tree = this.parserInstance.parse(content)
     const symbols: ParsedSymbol[] = []
     const edges: Edge[] = []
-    walkNode(tree.rootNode, filePath, repoId, symbols, edges, null)
+    const importedNames = collectImportedNames(tree.rootNode)
+    walkNode(tree.rootNode, filePath, repoId, symbols, edges, null, importedNames)
     return { symbols, edges }
   }
+}
+
+/** Collect locally-bound names from Python import statements. */
+function collectImportedNames(root: SyntaxNode): Set<string> {
+  const names = new Set<string>()
+  for (const node of root.namedChildren) {
+    // from auth.service import TokenService, AuthError
+    if (node.type === 'import_from_statement') {
+      const importKwIdx = node.children.findIndex(c => c.type === 'import')
+      if (importKwIdx !== -1) {
+        for (let i = importKwIdx + 1; i < node.namedChildren.length; i++) {
+          const c = node.namedChildren[i]
+          if (c.type === 'dotted_name' || c.type === 'identifier') {
+            names.add(c.text.split('.').pop()!)
+          } else if (c.type === 'aliased_import') {
+            const alias = c.childForFieldName('alias') ?? c.childForFieldName('name')
+            if (alias) names.add(alias.text)
+          }
+        }
+      }
+    }
+    // import os  /  import os as operating_system
+    if (node.type === 'import_statement') {
+      for (const child of node.namedChildren) {
+        if (child.type === 'dotted_name') names.add(child.text.split('.').pop()!)
+        if (child.type === 'aliased_import') {
+          const alias = child.childForFieldName('alias') ?? child.childForFieldName('name')
+          if (alias) names.add(alias.text)
+        }
+      }
+    }
+  }
+  return names
+}
+
+function extractUses(
+  node: SyntaxNode,
+  fromId: string,
+  importedNames: Set<string>,
+  seen: Set<string>,
+  edges: Edge[],
+): void {
+  if (node.type === 'identifier' && importedNames.has(node.text)) {
+    const key = `${fromId}::${node.text}`
+    if (!seen.has(key)) { seen.add(key); edges.push({ from: fromId, to: node.text, kind: 'uses' }) }
+  }
+  for (const child of node.namedChildren) extractUses(child, fromId, importedNames, seen, edges)
 }
 
 function walkNode(
@@ -39,6 +87,7 @@ function walkNode(
   symbols: ParsedSymbol[],
   edges: Edge[],
   classCtx: string | null,
+  importedNames: Set<string> = new Set(),
 ): void {
   switch (node.type) {
     case 'class_definition': {
@@ -61,7 +110,7 @@ function walkNode(
         const body = node.childForFieldName('body')
         if (body) {
           for (const c of body.namedChildren) {
-            walkNode(c, filePath, repoId, symbols, edges, qn)
+            walkNode(c, filePath, repoId, symbols, edges, qn, importedNames)
           }
         }
         return
@@ -76,32 +125,32 @@ function walkNode(
         const qn = classCtx ? `${classCtx}.${name}` : name
         const params = node.childForFieldName('parameters')
         const retType = node.childForFieldName('return_type')
-        // Check if async — look for 'async' keyword sibling
         const isAsync = node.parent?.type === 'decorated_definition'
           ? false
           : node.children.some(c => c.type === 'async')
         const prefix = isAsync ? 'async def' : 'def'
         const sig = `${prefix} ${name}${params ? params.text : '()'}${retType ? ` -> ${retType.text}` : ''}`
         const kind = classCtx ? 'method' : 'function'
+        const symId = makeSymbolId(filePath, qn)
         symbols.push({
-          id: makeSymbolId(filePath, qn), filePath, name, qualifiedName: qn,
+          id: symId, filePath, name, qualifiedName: qn,
           kind, signature: sig,
           bodyRange: [node.startPosition.row + 1, node.endPosition.row + 1],
           repoId,
         })
-        extractPyCalls(node, makeSymbolId(filePath, qn), edges)
+        extractPyCalls(node, symId, edges)
+        extractUses(node, symId, importedNames, new Set(), edges)
         return
       }
       break
     }
 
     case 'decorated_definition': {
-      // May wrap function_definition or class_definition
       const inner = node.namedChildren.find(c =>
         c.type === 'function_definition' || c.type === 'class_definition'
       )
       if (inner) {
-        walkNode(inner, filePath, repoId, symbols, edges, classCtx)
+        walkNode(inner, filePath, repoId, symbols, edges, classCtx, importedNames)
         return
       }
       break
@@ -132,7 +181,7 @@ function walkNode(
     node.type !== 'function_definition' &&
     node.type !== 'decorated_definition') {
     for (const child of node.namedChildren) {
-      walkNode(child, filePath, repoId, symbols, edges, classCtx)
+      walkNode(child, filePath, repoId, symbols, edges, classCtx, importedNames)
     }
   }
 }

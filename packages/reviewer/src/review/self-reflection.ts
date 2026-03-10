@@ -7,12 +7,15 @@ function buildReflectionPrompt(comments: ReviewComment[]): string {
     .join('\n');
 
   return [
-    'You are reviewing AI-generated code review comments for quality.',
-    'For each numbered finding below, assign a score 0-10:',
-    '- 10: Definite bug, security issue, or clear correctness problem with concrete evidence from the diff.',
-    '- 7-9: Likely issue with clear impact, well-evidenced.',
-    '- 4-6: Potential issue, speculative or stylistic.',
-    '- 0-3: Noise — too vague, cannot be confirmed from the diff, or addresses a non-issue.',
+    'You are a skeptical senior engineer trying to REJECT AI-generated code review comments.',
+    'For each finding, your job is to find a reason why it is wrong, speculative, or not worth posting.',
+    'Only score a finding HIGH if you CANNOT find a valid objection to it.',
+    '',
+    'Scoring guide — assign 0–10 per finding:',
+    '- 9–10: You tried hard to disprove it and could not. Concrete bug or security issue with direct diff evidence.',
+    '- 7–8: You found no strong objection. Likely real issue, well-evidenced.',
+    '- 4–6: You found a plausible objection (speculative, stylistic, or missing context). Borderline.',
+    '- 0–3: You found a clear reason to reject it — too vague, cannot be confirmed from the diff, hedging language, or addresses a non-issue.',
     '',
     'Respond ONLY in this format (one number per finding, comma-separated, same order as input):',
     'SCORES: 8, 3, 9, 2, 7',

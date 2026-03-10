@@ -64,12 +64,17 @@ export class UnifiedLLMBackend extends BaseLLMBackend {
     return text;
   }
 
-  override async generateReview(context: ReviewContext): Promise<ReviewResult> {
+  override async generateReview(context: ReviewContext, temperature?: number): Promise<ReviewResult> {
+    // When a symbolExplorer is present, delegate to base class which runs the tool loop.
+    if (context.symbolExplorer) {
+      return super.generateReview(context, temperature);
+    }
     const prompt = buildReviewPrompt(context);
+    const temp = temperature ?? this.defaultTemperature;
     const { text, usage } = await generateText({
       model: this.languageModel,
       prompt,
-      ...(this.defaultTemperature !== undefined && { temperature: this.defaultTemperature }),
+      ...(temp !== undefined && { temperature: temp }),
     });
     const result = parseReviewResponse(text);
     const tokensUsed = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);

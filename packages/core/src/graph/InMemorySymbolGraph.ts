@@ -27,7 +27,9 @@ export class InMemorySymbolGraph {
     this.outEdges.get(e.from)!.push(e)
     // For call edges the `to` is often a bare name (e.g. "cn") not a full ID.
     // Resolve it to all matching full symbol IDs so callers BFS works correctly.
-    const toKeys = e.kind === 'calls' ? this.resolveCallTarget(e.to) : [e.to]
+    // Resolve both 'calls' and 'uses' edges through nameToIds so imported symbols
+    // end up at graphDistance=1 instead of the sentinel 3.
+    const toKeys = (e.kind === 'calls' || e.kind === 'uses') ? this.resolveCallTarget(e.to) : [e.to]
     for (const key of toKeys) {
       if (!this.inEdges.has(key)) this.inEdges.set(key, [])
       this.inEdges.get(key)!.push(e)

@@ -27,9 +27,52 @@ export class GoParser extends TreeSitterParser {
     const tree = this.parserInstance.parse(content)
     const symbols: ParsedSymbol[] = []
     const edges: Edge[] = []
-    walkNode(tree.rootNode, filePath, repoId, symbols, edges, null)
+    const importedPkgs = collectImportedPackages(tree.rootNode)
+    walkNode(tree.rootNode, filePath, repoId, symbols, edges, null, importedPkgs)
     return { symbols, edges }
   }
+}
+
+/**
+ * Collect package aliases from import declarations.
+ * `import "net/http"` → alias "http"; `import h "net/http"` → alias "h"
+ */
+function collectImportedPackages(root: SyntaxNode): Set<string> {
+  const pkgs = new Set<string>()
+  function visit(n: SyntaxNode): void {
+    if (n.type === 'import_spec') {
+      const nameNode = n.childForFieldName('name')
+      const pathNode = n.childForFieldName('path') ?? n.namedChildren.find(c => c.type === 'interpreted_string_literal')
+      if (nameNode && nameNode.text !== '_' && nameNode.text !== '.') {
+        pkgs.add(nameNode.text)
+      } else if (pathNode) {
+        const raw = pathNode.text.replace(/['"]/g, '')
+        const alias = raw.split('/').pop()
+        if (alias) pkgs.add(alias)
+      }
+    }
+    for (const child of n.namedChildren) visit(child)
+  }
+  visit(root)
+  return pkgs
+}
+
+function extractGoUses(
+  node: SyntaxNode,
+  fromId: string,
+  importedPkgs: Set<string>,
+  seen: Set<string>,
+  edges: Edge[],
+): void {
+  // Emit a 'uses' edge when we see pkg.Something where pkg is an imported package alias
+  if (node.type === 'selector_expression') {
+    const obj = node.childForFieldName('operand')
+    if (obj && obj.type === 'identifier' && importedPkgs.has(obj.text)) {
+      const key = `${fromId}::${obj.text}`
+      if (!seen.has(key)) { seen.add(key); edges.push({ from: fromId, to: obj.text, kind: 'uses' }) }
+    }
+  }
+  for (const child of node.namedChildren) extractGoUses(child, fromId, importedPkgs, seen, edges)
 }
 
 function walkNode(
@@ -39,6 +82,7 @@ function walkNode(
   symbols: ParsedSymbol[],
   edges: Edge[],
   typeCtx: string | null,
+  importedPkgs: Set<string> = new Set(),
 ): void {
   switch (node.type) {
     case 'function_declaration': {
@@ -48,13 +92,15 @@ function walkNode(
         const params = node.childForFieldName('parameters')
         const result = node.childForFieldName('result')
         const sig = `func ${name}${params ? params.text : '()'}${result ? ' ' + result.text : ''}`
+        const symId = makeSymbolId(filePath, name)
         symbols.push({
-          id: makeSymbolId(filePath, name), filePath, name, qualifiedName: name,
+          id: symId, filePath, name, qualifiedName: name,
           kind: 'function', signature: sig,
           bodyRange: [node.startPosition.row + 1, node.endPosition.row + 1],
           repoId,
         })
-        extractCalls(node, makeSymbolId(filePath, name), edges)
+        extractCalls(node, symId, edges)
+        extractGoUses(node, symId, importedPkgs, new Set(), edges)
         return
       }
       break
@@ -80,13 +126,15 @@ function walkNode(
         const params = node.childForFieldName('parameters')
         const result = node.childForFieldName('result')
         const sig = `func (${receiverNode?.text ?? ''}) ${name}${params ? params.text : '()'}${result ? ' ' + result.text : ''}`
+        const symId = makeSymbolId(filePath, qn)
         symbols.push({
-          id: makeSymbolId(filePath, qn), filePath, name, qualifiedName: qn,
+          id: symId, filePath, name, qualifiedName: qn,
           kind: 'method', signature: sig,
           bodyRange: [node.startPosition.row + 1, node.endPosition.row + 1],
           repoId,
         })
-        extractCalls(node, makeSymbolId(filePath, qn), edges)
+        extractCalls(node, symId, edges)
+        extractGoUses(node, symId, importedPkgs, new Set(), edges)
         return
       }
       break
@@ -127,7 +175,7 @@ function walkNode(
   // Default recursion
   if (node.type !== 'function_declaration' && node.type !== 'method_declaration') {
     for (const child of node.namedChildren) {
-      walkNode(child, filePath, repoId, symbols, edges, typeCtx)
+      walkNode(child, filePath, repoId, symbols, edges, typeCtx, importedPkgs)
     }
   }
 }

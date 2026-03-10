@@ -27,9 +27,45 @@ export class CSharpParser extends TreeSitterParser {
     const tree = this.parserInstance.parse(content)
     const symbols: ParsedSymbol[] = []
     const edges: Edge[] = []
-    walkNode(tree.rootNode, filePath, repoId, symbols, edges, null)
+    const importedNames = collectImportedNames(tree.rootNode)
+    walkNode(tree.rootNode, filePath, repoId, symbols, edges, null, importedNames)
     return { symbols, edges }
   }
+}
+
+/** Collect locally-bound names from C# using directives. */
+function collectImportedNames(root: SyntaxNode): Set<string> {
+  const names = new Set<string>()
+  function visit(n: SyntaxNode): void {
+    if (n.type === 'using_directive') {
+      // using Alias = Some.Type; — the alias identifier is the local name
+      const alias = n.namedChildren.find(c => c.type === 'name_equals')
+      if (alias) {
+        const id = alias.namedChildren.find(c => c.type === 'identifier')
+        if (id) { names.add(id.text); return }
+      }
+      // using System.Collections.Generic; — last segment is the local name
+      const ns = n.namedChildren.find(c => c.type === 'identifier' || c.type === 'qualified_name')
+      if (ns) names.add(ns.text.split('.').pop()!)
+    }
+    for (const child of n.namedChildren) visit(child)
+  }
+  visit(root)
+  return names
+}
+
+function extractUses(
+  node: SyntaxNode,
+  fromId: string,
+  importedNames: Set<string>,
+  seen: Set<string>,
+  edges: Edge[],
+): void {
+  if (node.type === 'identifier' && importedNames.has(node.text)) {
+    const key = `${fromId}::${node.text}`
+    if (!seen.has(key)) { seen.add(key); edges.push({ from: fromId, to: node.text, kind: 'uses' }) }
+  }
+  for (const child of node.namedChildren) extractUses(child, fromId, importedNames, seen, edges)
 }
 
 function walkNode(
@@ -39,6 +75,7 @@ function walkNode(
   symbols: ParsedSymbol[],
   edges: Edge[],
   classCtx: string | null,
+  importedNames: Set<string> = new Set(),
 ): void {
   switch (node.type) {
     case 'class_declaration':
@@ -69,7 +106,7 @@ function walkNode(
         const body = node.childForFieldName('body')
         if (body) {
           for (const child of body.namedChildren) {
-            walkNode(child, filePath, repoId, symbols, edges, qn)
+            walkNode(child, filePath, repoId, symbols, edges, qn, importedNames)
           }
         }
         return
@@ -100,13 +137,15 @@ function walkNode(
         const params = node.childForFieldName('parameters')
         const returnType = node.childForFieldName('type')
         const sig = `${returnType ? returnType.text + ' ' : ''}${name}${params ? params.text : '()'}`
+        const symId = makeSymbolId(filePath, qn)
         symbols.push({
-          id: makeSymbolId(filePath, qn), filePath, name, qualifiedName: qn,
+          id: symId, filePath, name, qualifiedName: qn,
           kind: 'method', signature: sig,
           bodyRange: [node.startPosition.row + 1, node.endPosition.row + 1],
           repoId,
         })
-        extractCalls(node, makeSymbolId(filePath, qn), edges)
+        extractCalls(node, symId, edges)
+        extractUses(node, symId, importedNames, new Set(), edges)
         return
       }
       break
@@ -119,13 +158,15 @@ function walkNode(
         const qn = classCtx ? `${classCtx}.${name}` : name
         const params = node.childForFieldName('parameters')
         const sig = `${name}${params ? params.text : '()'}`
+        const symId = makeSymbolId(filePath, qn)
         symbols.push({
-          id: makeSymbolId(filePath, qn), filePath, name, qualifiedName: qn,
+          id: symId, filePath, name, qualifiedName: qn,
           kind: 'method', signature: sig,
           bodyRange: [node.startPosition.row + 1, node.endPosition.row + 1],
           repoId,
         })
-        extractCalls(node, makeSymbolId(filePath, qn), edges)
+        extractCalls(node, symId, edges)
+        extractUses(node, symId, importedNames, new Set(), edges)
         return
       }
       break
@@ -147,7 +188,7 @@ function walkNode(
     node.type !== 'method_declaration' &&
     node.type !== 'constructor_declaration') {
     for (const child of node.namedChildren) {
-      walkNode(child, filePath, repoId, symbols, edges, classCtx)
+      walkNode(child, filePath, repoId, symbols, edges, classCtx, importedNames)
     }
   }
 }

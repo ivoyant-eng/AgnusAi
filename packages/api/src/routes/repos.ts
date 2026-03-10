@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync } from 'fs'
-import { exec } from 'child_process'
+import { exec, type ExecException } from 'child_process'
 import { promisify } from 'util'
 import crypto from 'crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
@@ -13,9 +13,11 @@ import { createDefaultRegistry, Indexer, InMemorySymbolGraph, PostgresStorageAda
 import type { IndexProgress } from '@agnus-ai/shared'
 import { loadRepo, getOrLoadRepo, evictRepo } from '../graph-cache'
 import { createEmbeddingAdapter } from '../embedding-factory'
+import { resolveCloneToken, buildAuthenticatedUrl } from '../git-utils'
 import { requireAuth, requireOrgAdmin } from '../auth/middleware'
 import { isVcsPlatform, type AuthJwtClaims, type VcsPlatform } from '../auth/types'
 import { runReview } from '../review-runner'
+import { buildAzureAuthUrl, exchangeAzureCode, getAzureOAuthToken } from '../azure-oauth'
 import {
   DEFAULT_REPO_PR_DESCRIPTION_SETTINGS,
   normalizeRepoPRDescriptionSettings,
@@ -58,13 +60,13 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     const orgId = activeOrg(req)
     const { rows } = isSystemAdmin(req) && !orgId
       ? await pool.query(
-          'SELECT repo_id, repo_url, platform, repo_path, indexed_at, symbol_count, created_at FROM repos ORDER BY created_at DESC',
+          'SELECT repo_id, repo_url, platform, repo_path, indexed_at, symbol_count, created_at, github_app_id, github_app_installation_id, vcs_installation_id FROM repos ORDER BY created_at DESC',
         )
       : await pool.query(
-          'SELECT repo_id, repo_url, platform, repo_path, indexed_at, symbol_count, created_at FROM repos WHERE org_id = $1 ORDER BY created_at DESC',
+          'SELECT repo_id, repo_url, platform, repo_path, indexed_at, symbol_count, created_at, github_app_id, github_app_installation_id, vcs_installation_id FROM repos WHERE org_id = $1 ORDER BY created_at DESC',
           [orgId],
         )
-    return reply.send(rows.map(r => ({
+    return reply.send(rows.map((r: any) => ({
       repoId: r.repo_id,
       repoUrl: r.repo_url,
       platform: r.platform,
@@ -72,6 +74,9 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
       indexedAt: r.indexed_at,
       symbolCount: r.symbol_count ?? 0,
       createdAt: r.created_at,
+      githubAppId: r.github_app_id ?? null,
+      githubAppInstallationId: r.github_app_installation_id ?? null,
+      vcsInstallationId: r.vcs_installation_id ?? null,
     })))
   })
 
@@ -411,13 +416,19 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
   app.post('/api/repos', { preHandler: [requireAuth] }, async (req, reply) => {
     const orgId = activeOrg(req)
     if (!orgId) return reply.status(400).send({ error: 'Active org is required' })
-    const { repoUrl, platform, token, repoPath, branches } = req.body as {
+    const { repoUrl, platform, token: rawToken, repoPath, branches, vcsInstallationId,
+            githubAppId: rawGithubAppId, githubAppPrivateKey: rawGithubAppPrivateKey, githubAppInstallationId: rawGithubAppInstallationId } = req.body as {
       repoUrl: string
       platform: VcsPlatform
       token?: string
       repoPath?: string
       branches?: string[]
+      vcsInstallationId?: string
+      githubAppId?: string
+      githubAppPrivateKey?: string
+      githubAppInstallationId?: string
     }
+    let token = rawToken
 
     if (!repoUrl || !isVcsPlatform(platform)) {
       return reply.status(400).send({ error: 'repoUrl and platform are required' })
@@ -426,7 +437,29 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     const indexBranches = (branches && branches.length > 0) ? branches : ['main']
 
     // Derive a stable repoId from the URL
-    const repoId = Buffer.from(`${orgId}:${repoUrl}`).toString('base64url').slice(0, 32)
+    const repoId = Buffer.from(repoUrl).toString('base64url').slice(0, 32)
+
+    // If connecting via a saved VCS installation, pull credentials from it
+    let githubAppId = rawGithubAppId
+    let githubAppPrivateKey = rawGithubAppPrivateKey
+    let githubAppInstallationId = rawGithubAppInstallationId
+    if (vcsInstallationId) {
+      const { rows: instRows } = await pool.query(
+        `SELECT platform, github_app_id, github_app_private_key, github_app_installation_id
+         FROM vcs_installations WHERE id = $1 AND org_id = $2`,
+        [vcsInstallationId, orgId],
+      )
+      if (!instRows[0]) return reply.status(404).send({ error: 'VCS installation not found' })
+      if (instRows[0].platform === 'azure') {
+        // Azure OAuth installation: token is fetched fresh at review time via vcs_installation_id
+        // (OAuth tokens expire; review-runner calls getAzureOAuthToken with the installation ID)
+        token = undefined
+      } else {
+        githubAppId = instRows[0].github_app_id
+        githubAppPrivateKey = instRows[0].github_app_private_key
+        githubAppInstallationId = instRows[0].github_app_installation_id
+      }
+    }
 
     // Ensure repos table exists and upsert the registration
     await pool.query(`
@@ -444,10 +477,20 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     `)
     await pool.query(`ALTER TABLE repos ADD COLUMN IF NOT EXISTS org_id TEXT REFERENCES organizations(id) ON DELETE CASCADE`)
     await pool.query(
-      `INSERT INTO repos (repo_id, repo_url, platform, token, repo_path, org_id)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       ON CONFLICT (repo_id) DO UPDATE SET token = EXCLUDED.token, repo_path = EXCLUDED.repo_path`,
-      [repoId, repoUrl, platform, token ?? null, repoPath ?? null, orgId],
+      `INSERT INTO repos (repo_id, repo_url, platform, token, repo_path, org_id,
+                          github_app_id, github_app_private_key, github_app_installation_id,
+                          vcs_installation_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (repo_id) DO UPDATE SET
+         token = EXCLUDED.token,
+         repo_path = EXCLUDED.repo_path,
+         github_app_id = EXCLUDED.github_app_id,
+         github_app_private_key = EXCLUDED.github_app_private_key,
+         github_app_installation_id = EXCLUDED.github_app_installation_id,
+         vcs_installation_id = EXCLUDED.vcs_installation_id`,
+      [repoId, repoUrl, platform, token ?? null, repoPath ?? null, orgId,
+       githubAppId ?? null, githubAppPrivateKey ?? null, githubAppInstallationId ?? null,
+       vcsInstallationId ?? null],
     )
 
     // Ensure repo_branches table exists and insert branch registrations
@@ -467,7 +510,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     // Trigger full index in background
     setImmediate(() => {
-      runFullIndex(pool, repoId, repoPath ?? null, indexBranches, repoUrl, token)
+      runFullIndex(pool, repoId, repoPath ?? null, indexBranches, repoUrl, token,
+        githubAppId, githubAppPrivateKey, githubAppInstallationId, vcsInstallationId)
     })
 
     return reply.status(202).send({
@@ -486,8 +530,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     const { rows } = await pool.query(
       isSystemAdmin(req) && !orgId
-        ? 'SELECT repo_url, repo_path, token FROM repos WHERE repo_id = $1'
-        : 'SELECT repo_url, repo_path, token FROM repos WHERE repo_id = $1 AND org_id = $2',
+        ? 'SELECT repo_url, repo_path, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1'
+        : 'SELECT repo_url, repo_path, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1 AND org_id = $2',
       isSystemAdmin(req) && !orgId ? [repoId] : [repoId, orgId],
     )
     if (rows.length === 0) {
@@ -509,7 +553,8 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     )
 
     setImmediate(() => {
-      runFullIndex(pool, repoId, rows[0].repo_path, branches, rows[0].repo_url, rows[0].token)
+      const r = rows[0] as any
+      runFullIndex(pool, repoId, r.repo_path, branches, r.repo_url, r.token, r.github_app_id, r.github_app_private_key, r.github_app_installation_id, r.vcs_installation_id)
     })
 
     return reply.status(202).send({
@@ -593,15 +638,15 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     const { rows } = await pool.query(
       isSystemAdmin(req) && !orgId
-        ? 'SELECT repo_url, platform, token FROM repos WHERE repo_id = $1'
-        : 'SELECT repo_url, platform, token FROM repos WHERE repo_id = $1 AND org_id = $2',
+        ? 'SELECT repo_url, platform, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1'
+        : 'SELECT repo_url, platform, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id FROM repos WHERE repo_id = $1 AND org_id = $2',
       isSystemAdmin(req) && !orgId ? [repoId] : [repoId, orgId],
     )
     if (rows.length === 0) {
       return reply.status(404).send({ error: 'Repo not found' })
     }
 
-    const { repo_url: repoUrl, platform, token } = rows[0]
+    const { repo_url: repoUrl, platform, token, github_app_id, github_app_private_key, github_app_installation_id, vcs_installation_id } = rows[0] as any
 
     // Run review synchronously so the caller gets the result
     try {
@@ -612,17 +657,366 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
         prNumber,
         baseBranch,
         token: token ?? undefined,
+        githubAppId: github_app_id ?? undefined,
+        githubAppPrivateKey: github_app_private_key ?? undefined,
+        githubAppInstallationId: github_app_installation_id ?? undefined,
+        vcsInstallationId: vcs_installation_id ?? undefined,
         pool,
         dryRun,
       })
 
-      const { verdict, commentCount, comments } = result
-      return reply.send({ verdict, commentCount, prNumber, repoId, ...(dryRun ? { dryRun: true, comments } : {}) })
+      const { verdict, commentCount, prScore, comments, toolTelemetry } = result as any
+      return reply.send({ verdict, commentCount, prScore: prScore ?? null, prNumber, repoId, ...(dryRun ? { dryRun: true, comments, ...(toolTelemetry ? { toolTelemetry } : {}) } : {}) })
     } catch (err) {
       const msg = (err as Error).message
       console.error(`[repos] Manual review failed for PR ${prNumber}:`, msg)
       return reply.status(500).send({ error: msg })
     }
+  })
+
+  // ── VCS Installation routes ────────────────────────────────────────────────
+
+  /** GET /api/vcs-installations — list saved installations for the active org */
+  app.get('/api/vcs-installations', { preHandler: [requireAuth] }, async (req, reply) => {
+    const orgId = activeOrg(req)
+    if (!orgId) return reply.status(403).send({ error: 'No active org' })
+    const { rows } = await pool.query(
+      `SELECT id, platform, display_name, account_login, account_type,
+              github_app_id, github_app_installation_id,
+              azure_client_id, azure_tenant_id, azure_org_url,
+              (azure_access_token IS NOT NULL) AS azure_connected,
+              created_at
+       FROM vcs_installations WHERE org_id = $1 ORDER BY created_at ASC`,
+      [orgId],
+    )
+    return reply.send({ installations: rows })
+  })
+
+  /** POST /api/vcs-installations — save a new installation, validate credentials */
+  app.post('/api/vcs-installations', { preHandler: [requireAuth] }, async (req, reply) => {
+    const orgId = activeOrg(req)
+    if (!orgId) return reply.status(403).send({ error: 'No active org' })
+    const { platform, displayName, appId, privateKey, installationId, clientId, clientSecret, tenantId, azureOrgUrl, redirectUri } = req.body as {
+      platform: string
+      displayName?: string
+      // GitHub App
+      appId?: string
+      privateKey?: string
+      installationId?: string
+      // Azure Entra ID
+      clientId?: string
+      clientSecret?: string
+      tenantId?: string
+      azureOrgUrl?: string
+      redirectUri?: string
+    }
+    if (!platform) return reply.status(400).send({ error: 'platform is required' })
+
+    let accountLogin: string | null = null
+    let accountType: string | null = null
+    let authUrl: string | undefined
+
+    if (platform === 'github') {
+      if (!appId || !privateKey || !installationId) {
+        return reply.status(400).send({ error: 'appId, privateKey, and installationId are required for GitHub' })
+      }
+      try {
+        const { Octokit } = await import('@octokit/rest')
+        const { createAppAuth } = await import('@octokit/auth-app')
+        const octokit = new Octokit({
+          authStrategy: createAppAuth,
+          auth: { appId, privateKey, installationId: Number(installationId) },
+        })
+        const { data } = await octokit.apps.getInstallation({ installation_id: Number(installationId) })
+        accountLogin = (data.account as { login?: string })?.login ?? null
+        accountType = (data.account as { type?: string })?.type ?? null
+      } catch (err) {
+        return reply.status(400).send({ error: `GitHub credentials invalid: ${(err as Error).message}` })
+      }
+    } else if (platform === 'azure') {
+      if (!clientId || !clientSecret || !tenantId || !azureOrgUrl) {
+        return reply.status(400).send({ error: 'clientId, clientSecret, tenantId, and azureOrgUrl are required for Azure DevOps' })
+      }
+      accountLogin = azureOrgUrl.replace(/\/$/, '').split('/').pop() ?? null
+      accountType = 'Organization'
+    }
+
+    // Generate OAuth state for Azure (used in callback to find this installation)
+    const oauthState = platform === 'azure' ? crypto.randomUUID() : null
+
+    const callbackUri = platform === 'azure'
+      ? (redirectUri ?? `${process.env.PUBLIC_URL ?? `${req.protocol}://${req.hostname}`}/api/ado/oauth/callback`)
+      : null
+
+    const { rows } = await pool.query(
+      `INSERT INTO vcs_installations
+         (org_id, platform, display_name, account_login, account_type,
+          github_app_id, github_app_private_key, github_app_installation_id,
+          azure_client_id, azure_client_secret, azure_tenant_id, azure_org_url, azure_oauth_state, azure_redirect_uri)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       RETURNING id, platform, display_name, account_login, account_type,
+                 github_app_id, github_app_installation_id,
+                 azure_client_id, azure_tenant_id, azure_org_url, created_at`,
+      [orgId, platform, displayName ?? accountLogin ?? null,
+       accountLogin, accountType,
+       appId ?? null, privateKey ?? null, installationId ?? null,
+       clientId ?? null, clientSecret ?? null, tenantId ?? null, azureOrgUrl ?? null, oauthState, callbackUri],
+    )
+    const installation = rows[0]
+
+    if (platform === 'azure' && oauthState && clientId && tenantId && callbackUri) {
+      authUrl = buildAzureAuthUrl({ clientId, tenantId, redirectUri: callbackUri, state: oauthState })
+    }
+
+    return reply.status(201).send({ installation, authUrl })
+  })
+
+  /** GET /api/ado/oauth/callback — Microsoft OAuth callback, exchanges code for tokens */
+  app.get('/api/ado/oauth/callback', async (req, reply) => {
+    const { code, state, error } = req.query as { code?: string; state?: string; error?: string }
+    const dashboardBase = process.env.DASHBOARD_URL ?? '/app/connect'
+
+    if (error || !code || !state) {
+      return reply.redirect(`${dashboardBase}?azure_error=${encodeURIComponent(error ?? 'missing_params')}`)
+    }
+
+    const { rows } = await pool.query(
+      `SELECT id, azure_client_id, azure_client_secret, azure_tenant_id, azure_redirect_uri
+       FROM vcs_installations WHERE azure_oauth_state = $1`,
+      [state],
+    )
+    if (!rows[0]) return reply.redirect(`${dashboardBase}?azure_error=invalid_state`)
+    const inst = rows[0]
+
+    try {
+      const redirectUri = inst.azure_redirect_uri
+        ?? `${process.env.PUBLIC_URL ?? `${req.protocol}://${req.hostname}`}/api/ado/oauth/callback`
+      const tokens = await exchangeAzureCode({
+        code, clientId: inst.azure_client_id, clientSecret: inst.azure_client_secret,
+        tenantId: inst.azure_tenant_id, redirectUri,
+      })
+      await pool.query(
+        `UPDATE vcs_installations
+         SET azure_access_token = $1, azure_refresh_token = $2, azure_token_expires_at = $3, azure_oauth_state = NULL
+         WHERE id = $4`,
+        [tokens.accessToken, tokens.refreshToken, tokens.expiresAt, inst.id],
+      )
+      return reply.redirect(`${dashboardBase}?azure_connected=${inst.id}`)
+    } catch (err) {
+      return reply.redirect(`${dashboardBase}?azure_error=${encodeURIComponent((err as Error).message)}`)
+    }
+  })
+
+  /** DELETE /api/vcs-installations/:id — remove a saved installation */
+  app.delete('/api/vcs-installations/:id', { preHandler: [requireAuth] }, async (req, reply) => {
+    const orgId = activeOrg(req)
+    if (!orgId) return reply.status(403).send({ error: 'No active org' })
+    const { id } = req.params as { id: string }
+    const { rowCount } = await pool.query(
+      'DELETE FROM vcs_installations WHERE id = $1 AND org_id = $2',
+      [id, orgId],
+    )
+    if (!rowCount) return reply.status(404).send({ error: 'Installation not found' })
+    return reply.send({ ok: true })
+  })
+
+  /** POST /api/vcs-installations/:id/reauth — regenerate Azure OAuth authorization URL */
+  app.post('/api/vcs-installations/:id/reauth', { preHandler: [requireAuth] }, async (req, reply) => {
+    const orgId = activeOrg(req)
+    if (!orgId) return reply.status(403).send({ error: 'No active org' })
+    const { id } = req.params as { id: string }
+    const { rows } = await pool.query(
+      `SELECT platform, azure_client_id, azure_tenant_id
+       FROM vcs_installations WHERE id = $1 AND org_id = $2`,
+      [id, orgId],
+    )
+    if (!rows[0]) return reply.status(404).send({ error: 'Installation not found' })
+    const inst = rows[0]
+    if (inst.platform !== 'azure') return reply.status(400).send({ error: 'Re-auth only applies to Azure installations' })
+    const { redirectUri: clientRedirectUri } = req.body as { redirectUri?: string }
+    const newState = crypto.randomUUID()
+    const redirectUri = clientRedirectUri
+      ?? `${process.env.PUBLIC_URL ?? `${req.protocol}://${req.hostname}`}/api/ado/oauth/callback`
+    await pool.query(
+      `UPDATE vcs_installations SET azure_oauth_state = $1, azure_redirect_uri = $2 WHERE id = $3`,
+      [newState, redirectUri, id],
+    )
+    const authUrl = buildAzureAuthUrl({ clientId: inst.azure_client_id, tenantId: inst.azure_tenant_id, redirectUri, state: newState })
+    return reply.send({ authUrl })
+  })
+
+  /** POST /api/vcs-installations/:id/repos — list repos for a saved installation */
+  app.post('/api/vcs-installations/:id/repos', { preHandler: [requireAuth] }, async (req, reply) => {
+    const orgId = activeOrg(req)
+    if (!orgId) return reply.status(403).send({ error: 'No active org' })
+    const { id } = req.params as { id: string }
+    const { rows } = await pool.query(
+      `SELECT platform, github_app_id, github_app_private_key, github_app_installation_id,
+              azure_org_url, azure_client_id, (azure_access_token IS NOT NULL) AS azure_connected
+       FROM vcs_installations WHERE id = $1 AND org_id = $2`,
+      [id, orgId],
+    )
+    if (!rows[0]) return reply.status(404).send({ error: 'Installation not found' })
+    const inst = rows[0]
+
+    if (inst.platform === 'azure') {
+      if (!inst.azure_org_url) {
+        return reply.status(400).send({ error: 'Azure installation is missing org URL' })
+      }
+      if (!inst.azure_connected) {
+        return reply.status(400).send({ error: 'Azure DevOps not yet authorized. Complete the OAuth flow in the Connect page.' })
+      }
+      try {
+        const accessToken = await getAzureOAuthToken(pool, id)
+        const normalizedUrl = inst.azure_org_url.replace(/\/$/, '')
+        const res = await fetch(`${normalizedUrl}/_apis/git/repositories?api-version=7.0`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        })
+        if (!res.ok) throw new Error(`Azure DevOps API returned ${res.status} ${res.statusText}`)
+        const data = await res.json() as { value: Array<{ id: string; name: string; project: { name: string }; remoteUrl: string; isDisabled?: boolean }> }
+        const repos = data.value
+          .filter(r => !r.isDisabled)
+          .map(r => ({
+            id: r.id,
+            name: r.name,
+            fullName: `${r.project.name}/${r.name}`,
+            url: r.remoteUrl,
+            private: true,
+          }))
+        const orgName = normalizedUrl.split('/').pop() ?? normalizedUrl
+        return reply.send({
+          repos,
+          installation: {
+            accountLogin: orgName,
+            accountType: 'Organization',
+            repositorySelection: 'all',
+          },
+        })
+      } catch (err) {
+        return reply.status(400).send({ error: (err as Error).message })
+      }
+    }
+
+    if (inst.platform === 'github') {
+      try {
+        const { Octokit } = await import('@octokit/rest')
+        const { createAppAuth } = await import('@octokit/auth-app')
+        const octokit = new Octokit({
+          authStrategy: createAppAuth,
+          auth: {
+            appId: inst.github_app_id,
+            privateKey: inst.github_app_private_key,
+            installationId: Number(inst.github_app_installation_id),
+          },
+        })
+        const [installationRes, allRepos] = await Promise.all([
+          octokit.apps.getInstallation({ installation_id: Number(inst.github_app_installation_id) }),
+          octokit.paginate(octokit.apps.listReposAccessibleToInstallation, { per_page: 100 }),
+        ])
+        const installation = installationRes.data
+        const repos = allRepos.map((r: { id: number; name: string; full_name: string; html_url: string; private: boolean; description?: string | null }) => ({
+          id: r.id,
+          name: r.name,
+          fullName: r.full_name,
+          url: r.html_url,
+          private: r.private,
+          description: r.description ?? null,
+        }))
+        return reply.send({
+          repos,
+          installation: {
+            accountLogin: (installation.account as { login?: string })?.login ?? null,
+            accountType: (installation.account as { type?: string })?.type ?? null,
+            repositorySelection: installation.repository_selection,
+          },
+        })
+      } catch (err) {
+        return reply.status(400).send({ error: (err as Error).message })
+      }
+    }
+
+    return reply.status(400).send({ error: `Repo listing not yet supported for platform: ${inst.platform}` })
+  })
+
+  /**
+   * POST /api/github-app/repos — list repos accessible to a GitHub App installation (auth required)
+   * Body: { appId, privateKey, installationId }
+   * Returns up to 100 repos the installation has access to.
+   */
+  app.post('/api/github-app/repos', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { appId, privateKey, installationId } = req.body as {
+      appId: string
+      privateKey: string
+      installationId: string
+    }
+    if (!appId || !privateKey || !installationId) {
+      return reply.status(400).send({ error: 'appId, privateKey, and installationId are required' })
+    }
+    try {
+      const { Octokit } = await import('@octokit/rest')
+      const { createAppAuth } = await import('@octokit/auth-app')
+      const octokit = new Octokit({
+        authStrategy: createAppAuth,
+        auth: { appId, privateKey, installationId: Number(installationId) },
+      })
+      // Fetch installation info and all repos (paginated) in parallel
+      const [installationRes, allRepos] = await Promise.all([
+        octokit.apps.getInstallation({ installation_id: Number(installationId) }),
+        octokit.paginate(octokit.apps.listReposAccessibleToInstallation, { per_page: 100 }),
+      ])
+      const installation = installationRes.data
+      const repos = allRepos.map((r: any) => ({
+        id: r.id,
+        name: r.name,
+        fullName: r.full_name,
+        url: r.html_url,
+        private: r.private,
+        description: r.description ?? null,
+      }))
+      return reply.send({
+        repos,
+        installation: {
+          accountLogin: (installation.account as any)?.login ?? null,
+          accountType: (installation.account as any)?.type ?? null,
+          repositorySelection: installation.repository_selection,
+        },
+      })
+    } catch (err: any) {
+      const msg = err?.message ?? 'Failed to list repositories'
+      return reply.status(400).send({ error: msg })
+    }
+  })
+
+  /**
+   * POST /api/repos/:id/github-app — add or update GitHub App credentials on an existing repo (auth required)
+   * Body: { appId, privateKey, installationId }
+   */
+  app.post('/api/repos/:id/github-app', { preHandler: [requireAuth] }, async (req, reply) => {
+    const { id: repoId } = req.params as { id: string }
+    const orgId = activeOrg(req)
+    const exists = await pool.query(
+      isSystemAdmin(req) && !orgId
+        ? 'SELECT 1 FROM repos WHERE repo_id = $1'
+        : 'SELECT 1 FROM repos WHERE repo_id = $1 AND org_id = $2',
+      isSystemAdmin(req) && !orgId ? [repoId] : [repoId, orgId],
+    )
+    if (exists.rows.length === 0) return reply.status(404).send({ error: 'Repo not found' })
+
+    const { appId, privateKey, installationId } = req.body as {
+      appId: string
+      privateKey: string
+      installationId: string
+    }
+    if (!appId || !privateKey || !installationId) {
+      return reply.status(400).send({ error: 'appId, privateKey, and installationId are required' })
+    }
+
+    await pool.query(
+      `UPDATE repos SET github_app_id = $1, github_app_private_key = $2, github_app_installation_id = $3 WHERE repo_id = $4`,
+      [appId, privateKey, installationId, repoId],
+    )
+
+    return reply.send({ ok: true, repoId, githubAppId: appId, githubAppInstallationId: installationId })
   })
 
   /**
@@ -964,6 +1358,10 @@ async function runFullIndex(
   indexBranches: string[],
   repoUrl?: string,
   token?: string | null,
+  githubAppId?: string | null,
+  githubAppPrivateKey?: string | null,
+  githubAppInstallationId?: string | null,
+  vcsInstallationId?: string | null,
 ): Promise<void> {
   let resolvedPath = repoPath
 
@@ -985,17 +1383,40 @@ async function runFullIndex(
   }
 
   try {
+    // Always generate a fresh token — GitHub App installation tokens expire after 1 hour
+    // For Azure OAuth installations, fetch a fresh Bearer token via the stored installation
+    let cloneToken = token
+    if (!cloneToken && !githubAppId && vcsInstallationId) {
+      try {
+        const { getAzureOAuthToken } = await import('../azure-oauth')
+        cloneToken = await getAzureOAuthToken(pool, vcsInstallationId)
+      } catch (err) {
+        console.error('[repos] Failed to get Azure OAuth token for clone:', (err as Error).message)
+      }
+    }
+    const freshToken = await resolveCloneToken(githubAppId, githubAppPrivateKey, githubAppInstallationId, cloneToken)
     if (!existsSync(cloneDir)) {
-      const cloneUrl = buildAuthenticatedUrl(repoUrl!, token ?? null)
-      console.log(`[repos] Auto-cloning ${repoUrl} → ${cloneDir}`)
-      await execAsync(`git clone --depth=1 "${cloneUrl}" "${cloneDir}"`, { timeout: 300_000 })
+      const cloneUrl = buildAuthenticatedUrl(repoUrl!, freshToken)
+      // Clone the first indexed branch explicitly so the refspec tracks the right branch
+      const primaryBranch = indexBranches[0] ?? 'main'
+      console.log(`[repos] Auto-cloning ${repoUrl} (branch: ${primaryBranch}) → ${cloneDir}`)
+      await execAsync(`git clone --depth=1 -b "${primaryBranch}" "${cloneUrl}" "${cloneDir}"`, { timeout: 300_000 })
     } else {
-      // Pull latest — always refresh before indexing
+      // Pull latest — update remote URL with a fresh token before fetching
       console.log(`[repos] Pulling latest in ${cloneDir}`)
-      await execAsync(`git -C "${cloneDir}" fetch --depth=1 origin && git -C "${cloneDir}" reset --hard origin/HEAD`, { timeout: 120_000 })
+      if (freshToken && repoUrl) {
+        const freshUrl = buildAuthenticatedUrl(repoUrl, freshToken)
+        await execAsync(`git -C "${cloneDir}" remote set-url origin "${freshUrl}"`, { timeout: 10_000 })
+      }
+      // Fetch the primary branch and reset to FETCH_HEAD.
+      // Note: shallow fetches don't create refs/remotes/origin/BRANCH, only FETCH_HEAD.
+      const primaryBranch = indexBranches[0]
+      await execAsync(`git -C "${cloneDir}" fetch --depth=1 origin "${primaryBranch}" && git -C "${cloneDir}" reset --hard FETCH_HEAD`, { timeout: 120_000 })
     }
   } catch (err) {
-    const errMsg = `Clone/pull failed: ${(err as Error).message.split('\n')[0]}`
+    const execErr = err as ExecException & { stderr?: string }
+    const detail = execErr.stderr?.trim() || execErr.message.split('\n').slice(1).join(' ').trim()
+    const errMsg = `Clone/pull failed: ${detail || execErr.message.split('\n')[0]}`
     console.error(`[repos] ${errMsg}`)
     for (const branch of indexBranches) setProgress(`${repoId}:${branch}`, { step: 'error', message: errMsg })
     return
@@ -1042,24 +1463,6 @@ async function runFullIndex(
   }
 }
 
-/** Build an authenticated clone URL by embedding the token as password */
-function buildAuthenticatedUrl(repoUrl: string, token: string | null): string {
-  if (!token) return repoUrl
-  try {
-    const url = new URL(repoUrl)
-    if (repoUrl.includes('dev.azure.com')) {
-      url.username = 'oauth2'
-      url.password = token
-    } else {
-      // GitHub / GitLab / others
-      url.username = token
-      url.password = 'x-oauth-basic'
-    }
-    return url.toString()
-  } catch {
-    return repoUrl
-  }
-}
 
 // ----- Simple in-process progress store -----
 // Key format: `${repoId}:${branch}`

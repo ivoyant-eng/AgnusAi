@@ -68,8 +68,10 @@ async function buildServer() {
   // Raw body support for webhook signature verification
   app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
     req.rawBody = body as Buffer
+    const str = (body as Buffer).toString().trim()
+    if (!str) return done(null, {})
     try {
-      done(null, JSON.parse((body as Buffer).toString()))
+      done(null, JSON.parse(str))
     } catch (err) {
       done(err as Error)
     }
@@ -658,6 +660,41 @@ async function main() {
     CREATE UNIQUE INDEX IF NOT EXISTS pr_review_state_uq
     ON pr_review_state (repo_id, pr_number, platform)
   `)
+  await pool.query(`ALTER TABLE repos ADD COLUMN IF NOT EXISTS github_app_id TEXT`)
+  await pool.query(`ALTER TABLE repos ADD COLUMN IF NOT EXISTS github_app_private_key TEXT`)
+  await pool.query(`ALTER TABLE repos ADD COLUMN IF NOT EXISTS github_app_installation_id TEXT`)
+
+  // VCS Installation profiles — saved App credentials per account/org/platform
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS vcs_installations (
+      id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      org_id                      TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      platform                    TEXT NOT NULL,
+      display_name                TEXT,
+      account_login               TEXT,
+      account_type                TEXT,
+      github_app_id               TEXT,
+      github_app_private_key      TEXT,
+      github_app_installation_id  TEXT,
+      azure_client_id             TEXT,
+      azure_client_secret         TEXT,
+      azure_tenant_id             TEXT,
+      azure_org_url               TEXT,
+      pat                         TEXT,
+      created_at                  TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await pool.query(`
+    ALTER TABLE repos ADD COLUMN IF NOT EXISTS vcs_installation_id UUID
+      REFERENCES vcs_installations(id) ON DELETE SET NULL
+  `)
+  // Azure Entra ID OAuth token storage
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_access_token TEXT`)
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_refresh_token TEXT`)
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_token_expires_at TIMESTAMPTZ`)
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_oauth_state TEXT`)
+  await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_redirect_uri TEXT`)
+
   app.log.info('Database schema migrated')
   await seedAdminUser(pool)
 
