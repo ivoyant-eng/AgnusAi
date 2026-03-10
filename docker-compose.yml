@@ -2,7 +2,7 @@ services:
   agnus:
     build: .
     environment:
-      - DATABASE_URL=postgres://agnus:agnus@postgres:5432/agnus
+      - DATABASE_URL=postgres://${POSTGRES_USER:-agnus}:${POSTGRES_PASSWORD:-agnus}@postgres:5432/${POSTGRES_DB:-agnus}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
@@ -75,13 +75,13 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
-      - POSTGRES_USER=agnus
-      - POSTGRES_PASSWORD=agnus
-      - POSTGRES_DB=agnus
+      - POSTGRES_USER=${POSTGRES_USER:-agnus}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-agnus}
+      - POSTGRES_DB=${POSTGRES_DB:-agnus}
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agnus"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agnus}"]
       interval: 5s
       timeout: 5s
       retries: 10
