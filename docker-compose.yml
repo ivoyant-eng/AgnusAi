@@ -62,6 +62,10 @@ services:
       - RATE_LIMIT_WEBHOOK_MAX=${RATE_LIMIT_WEBHOOK_MAX:-120}
       - RATE_LIMIT_WEBHOOK_WINDOW=${RATE_LIMIT_WEBHOOK_WINDOW:-1 minute}
       - HOST_ID=host.docker.internal
+      - OPENCODE_URL=${OPENCODE_URL:-http://opencode:4096}
+      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
+      - OPENCODE_PROVIDER_ID=${OPENCODE_PROVIDER_ID:-openai}
+      - OPENCODE_MODEL_ID=${OPENCODE_MODEL_ID:-gpt-5-mini}
     volumes:
       - /tmp:/tmp:ro
       - repos-data:/repos
@@ -85,6 +89,23 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+    networks:
+      - agnus-network
+
+  opencode:
+    image: ryv-opencode:local
+    volumes:
+      - repos-data:/repos
+    ports:
+      - "4096:4096"
+    environment:
+      - OPENCODE_SERVER_PASSWORD=${OPENCODE_SERVER_PASSWORD:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+      - AZURE_API_VERSION=${AZURE_API_VERSION:-2025-01-01-preview}
     restart: unless-stopped
     networks:
       - agnus-network
