@@ -1411,6 +1411,13 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     if (!createResponse.ok) {
       throw new Error(`Failed to create branch '${branchName}': ${createResponse.statusText}`);
     }
+    // Azure DevOps refs API returns HTTP 200 even for individual failures (e.g., branch already exists).
+    // Check the updateStatus of each ref in the response body.
+    const createData = await createResponse.json() as { value: Array<{ updateStatus: string; success: boolean }> };
+    const refResult = createData.value?.[0];
+    if (refResult && !refResult.success && refResult.updateStatus !== 'succeeded') {
+      throw new Error(`Failed to create branch '${branchName}': ${refResult.updateStatus}`);
+    }
   }
 
   /**
