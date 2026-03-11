@@ -124,10 +124,19 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: 'Invalid webhook secret' })
     }
     const payload = req.body as Record<string, unknown>
-    const repoUrl = (payload.resource as any)?.repository?.remoteUrl as string | undefined
+    const resource = payload.resource as any
+    const repoUrl = (resource?.repository?.remoteUrl ?? resource?.pullRequest?.repository?.remoteUrl) as string | undefined
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl, orgSlug)
     if (!repoId) return reply.status(200).send({ ok: true })
+
+    // @ryv command — intercept PR comment events
+    if (payload.eventType === 'ms.vss-code.git-pullrequest-comment-event') {
+      const result = await handleRyvCommandAzure(payload, repoId, repoUrl, pool)
+      if (result) return reply.status(202).send({ status: 'command accepted' })
+      return reply.status(200).send({ ok: true })
+    }
+
     const prEvent = await normalizeAzureEvent(payload, repoId, repoUrl, pool)
     await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
@@ -168,10 +177,19 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: 'Invalid webhook secret' })
     }
     const payload = req.body as Record<string, unknown>
-    const repoUrl = (payload.resource as any)?.repository?.remoteUrl as string | undefined
+    const resource = payload.resource as any
+    const repoUrl = (resource?.repository?.remoteUrl ?? resource?.pullRequest?.repository?.remoteUrl) as string | undefined
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl)
     if (!repoId) return reply.status(200).send({ ok: true })
+
+    // @ryv command — intercept PR comment events
+    if (payload.eventType === 'ms.vss-code.git-pullrequest-comment-event') {
+      const result = await handleRyvCommandAzure(payload, repoId, repoUrl, pool)
+      if (result) return reply.status(202).send({ status: 'command accepted' })
+      return reply.status(200).send({ ok: true })
+    }
+
     const prEvent = await normalizeAzureEvent(payload, repoId, repoUrl, pool)
     await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
@@ -223,6 +241,39 @@ async function handleRyvCommand(
         .catch(err => console.error('[command-runner] Error:', (err as Error).message))
     )
   }
+  return true
+}
+
+/** Handle Azure DevOps ms.vss-code.git-pullrequest-comment-event for @ryv commands */
+async function handleRyvCommandAzure(
+  payload: Record<string, unknown>,
+  repoId: string,
+  repoUrl: string,
+  pool: Pool,
+): Promise<boolean> {
+  if (!COMMANDS_ENABLED) return false
+
+  const resource = payload.resource as any
+  const comment = resource?.comment
+  const body = (comment?.content ?? '').trim()
+
+  if (!body.includes(`@${RYV_BOT_NAME}`)) return false
+
+  const pr = resource?.pullRequest
+  const prNumber = (pr?.pullRequestId ?? resource?.pullRequestId) as number
+  if (!prNumber) return false
+
+  const commentId = comment?.id as number
+  const threadId = (resource?.threadId ?? resource?.pullRequestThreadContext?.trackingCriteria?.firstComparingIteration) as number | undefined
+  const baseBranch = (pr?.targetRefName ?? '').replace('refs/heads/', '') || 'main'
+
+  const repoCreds = await getRepoCreds(pool, repoId)
+  const token = repoCreds.token
+
+  setImmediate(() =>
+    runCommand({ platform: 'azure', repoId, repoUrl, prNumber, commentId, threadId, token, baseBranch, rawBody: body, pool })
+      .catch(err => console.error('[command-runner] Error:', (err as Error).message))
+  )
   return true
 }
 
