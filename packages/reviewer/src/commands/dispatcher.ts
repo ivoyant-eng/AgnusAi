@@ -54,7 +54,7 @@ export async function dispatch(userQuery: string, llm: LLMBackend): Promise<Comm
 
   try {
     const prompt = buildClassifierPrompt(userQuery);
-    const raw = await llm.generate(prompt, classifierContext(), 0);
+    const raw = await llm.generate(prompt, classifierContext());
 
     // Extract JSON — strip any markdown fences the LLM might add
     const jsonStr = raw.replace(/```(?:json)?/g, '').trim();
