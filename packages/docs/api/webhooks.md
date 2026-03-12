@@ -93,6 +93,46 @@ For org-scoped endpoint (`/api/webhooks/azure/:orgSlug`), the secret is validate
 }
 ```
 
+## @ryv Commands — Bot Mention Detection
+
+When a PR comment contains an `@ryv` mention (or any name configured in `RYV_BOT_NAME`), the webhook handler routes to the command pipeline instead of the review pipeline.
+
+### How Bot Detection Works
+
+```
+Comment received
+      │
+      ▼
+isBotMentioned(commentBody, token, platform)
+  ├── Check RYV_BOT_NAME list (fast path, no network call)
+  └── If no static match: resolveBotDisplayName(token, platform)
+        ├── Azure: GET /_apis/connectionData → authenticatedUser.providerDisplayName
+        └── GitHub: GET https://api.github.com/user → login
+        └── Result cached per token (one API call per server restart)
+      │
+      ▼ matches → command-runner.ts
+      NLP intent classification → handler → immediate reply
+```
+
+The auto-detection means that if your Azure service account is "AI Agents", writing `@AI Agents fix this` triggers Ryv automatically — no extra configuration required. Mentions of unrelated users (`@john please fix`) are ignored.
+
+### Simulate a Command Comment
+
+```bash
+PAYLOAD='{"action":"created","comment":{"body":"@ryv re-review this PR","id":99},"pull_request":{"number":42},"repository":{"html_url":"https://github.com/owner/repo"}}'
+SIG=$(echo -n "$PAYLOAD" | openssl dgst -sha256 -hmac "$WEBHOOK_SECRET" | sed 's/.*= /sha256=/')
+
+curl -X POST http://localhost:3000/api/webhooks/github \
+  -H "Content-Type: application/json" \
+  -H "X-GitHub-Event: issue_comment" \
+  -H "X-Hub-Signature-256: $SIG" \
+  -d "$PAYLOAD"
+```
+
+→ See [@ryv Commands](/reference/commands) for the full command reference.
+
+---
+
 ## Testing Webhooks Locally
 
 Use [smee.io](https://smee.io) or [ngrok](https://ngrok.com) to forward GitHub webhooks to `localhost:3000`.
