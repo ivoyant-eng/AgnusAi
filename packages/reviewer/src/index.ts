@@ -41,7 +41,7 @@ export { validateSuggestions } from './review/suggestion-validator';
 export { runSelfReflection } from './review/self-reflection';
 export { detectSplit } from './review/split-detector';
 export { loadBestPractices } from './review/best-practices-loader';
-export { dispatch as dispatchCommand, COMMAND_REGISTRY } from './commands';
+export { dispatchCommand, COMMAND_REGISTRY } from './commands';
 export type { CommandContext, CommandIntent, CommandResult, CommandDescriptor } from './commands/types';
 export { ToolCallCache, SymbolExplorer } from './tools';
 export type { SymbolGraph, ToolStats } from './tools';
