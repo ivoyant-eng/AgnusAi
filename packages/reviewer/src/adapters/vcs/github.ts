@@ -586,9 +586,18 @@ export class GitHubAdapter implements VCSAdapter {
   }
 
   /**
+   * GitHub has no thread concept for issue_comments — all PR-level comments are flat.
+   * This is equivalent to getPRComments; the threadId parameter is ignored.
+   * Callers should filter by id < ctx.commentId to narrow to prior messages.
+   */
+  async getThreadComments(prId: string | number, _threadId?: number): Promise<PRComment[]> {
+    return this.getPRComments(prId);
+  }
+
+  /**
    * Get all review comments on a PR (inline comments on code)
    * Handles pagination to fetch ALL comments
-   * 
+   *
    * @param prId PR number
    * @returns List of detailed review comments
    */

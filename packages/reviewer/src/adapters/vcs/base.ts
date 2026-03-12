@@ -257,6 +257,20 @@ export interface VCSAdapter {
    */
   createReply?(prId: string | number, commentId: string | number, body: string): Promise<void>;
 
+  /**
+   * Get individual comments within a specific conversation thread.
+   *
+   * Azure DevOps: fetches `/threads/{threadId}/comments` — returns each reply in that thread
+   * with the real per-comment ID so they can be ordered against `ctx.commentId`.
+   *
+   * GitHub: no thread concept for issue_comments; returns all PR-level comments (same as
+   * getPRComments). Callers should filter by `id < ctx.commentId` to get prior messages.
+   *
+   * @param prId PR number
+   * @param threadId Azure thread ID (ctx.threadId). Ignored by GitHub.
+   */
+  getThreadComments?(prId: string | number, threadId?: number): Promise<PRComment[]>;
+
   // ============================================
   // Agentic Write Operations
   // ============================================

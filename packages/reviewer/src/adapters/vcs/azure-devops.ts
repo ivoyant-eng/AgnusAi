@@ -957,6 +957,50 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   /**
+   * Returns all individual comments within a specific Azure thread so the ask handler can
+   * reconstruct the conversation history for that thread only.
+   *
+   * Unlike getPRComments (which returns one entry per thread using thread.id as the ID),
+   * this method returns every comment in the thread with the real per-comment ID — so
+   * callers can correctly filter to those posted before ctx.commentId.
+   *
+   * If threadId is not provided, falls back to getPRComments (one entry per thread).
+   */
+  async getThreadComments(prId: string | number, threadId?: number): Promise<PRComment[]> {
+    if (!threadId) return this.getPRComments(prId);
+
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads?api-version=7.0`
+    );
+    const res = await fetch(url, { headers: this.getAuthHeaders() });
+    if (!res.ok) return [];
+
+    const data = await res.json() as {
+      value: Array<{
+        id: number;
+        comments: Array<{
+          id: number;
+          content: string;
+          author: { displayName: string; uniqueName: string };
+          publishedDate: string;
+          lastUpdatedDate: string;
+        }>;
+      }>;
+    };
+
+    const thread = (data.value ?? []).find(t => t.id === threadId);
+    if (!thread) return [];
+
+    return thread.comments.map(c => ({
+      id: c.id,
+      body: c.content ?? '',
+      user: { login: c.author?.displayName ?? c.author?.uniqueName ?? 'unknown', type: 'User' },
+      createdAt: c.publishedDate,
+      updatedAt: c.lastUpdatedDate,
+    }));
+  }
+
+  /**
    * Update a review comment.
    *
    * commentId is the thread id (as returned by getReviewComments). AgnusAI always writes
