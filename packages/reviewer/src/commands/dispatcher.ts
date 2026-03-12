@@ -3,7 +3,10 @@ import type { ReviewContext } from '../types';
 import type { CommandIntent } from './types';
 import { COMMAND_REGISTRY } from './registry';
 
-/** Minimal stub ReviewContext for the classifier call (no PR data needed) */
+/**
+ * Returns a minimal stub ReviewContext suitable for the NLP classifier call.
+ * The classifier only needs the LLM backend — no real PR data is required.
+ */
 function classifierContext(): ReviewContext {
   return {
     pr: { id: '', number: 0, title: '', description: '', author: { id: '', username: '' }, sourceBranch: '', targetBranch: '', url: '', createdAt: new Date(), updatedAt: new Date() },
@@ -15,6 +18,11 @@ function classifierContext(): ReviewContext {
   };
 }
 
+/**
+ * Builds the LLM prompt that classifies a free-text user message into a CommandIntent.
+ * Lists all registered commands with their descriptions and example phrases so the LLM
+ * can pick the best match. The returned `query` field must preserve the full user request.
+ */
 function buildClassifierPrompt(userQuery: string): string {
   const commandList = COMMAND_REGISTRY.map(cmd =>
     `- ${cmd.name}: ${cmd.description}\n  Examples: ${cmd.examples.join('; ')}`
@@ -30,7 +38,7 @@ function buildClassifierPrompt(userQuery: string): string {
     `User message: "${userQuery}"`,
     '',
     'Respond with ONLY valid JSON (no markdown, no explanation):',
-    '{"command": "<name>", "query": "<refined query>", "confidence": <0.0-1.0>}',
+    '{"command": "<name>", "query": "<full user request — preserve ALL requirements, do not shorten or drop any>", "confidence": <0.0-1.0>}',
     'If unsure, default to "ask".',
   ].join('\n');
 }
@@ -39,7 +47,7 @@ function buildClassifierPrompt(userQuery: string): string {
  * Classifies a free-text user query into a CommandIntent using a small LLM call.
  * Falls back to `ask` if classification fails or confidence is low.
  */
-export async function dispatch(userQuery: string, llm: LLMBackend): Promise<CommandIntent> {
+export async function dispatchCommand(userQuery: string, llm: LLMBackend): Promise<CommandIntent> {
   if (!userQuery.trim()) {
     return { command: 'help', query: '', confidence: 1 };
   }

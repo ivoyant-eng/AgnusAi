@@ -9,10 +9,20 @@ import type { Diff } from '../../types'
 
 const execAsync = promisify(exec)
 
+/**
+ * Returns true if the VCS adapter supports the write operations required for agentic
+ * commands (createBranch, commitFiles, openPR). GitHub and Azure DevOps both implement
+ * these; unsupported platforms return false and the handler replies with an error.
+ */
 export function hasAgenticSupport(vcs: VCSAdapter): boolean {
   return !!(vcs.createBranch && vcs.commitFiles && vcs.openPR)
 }
 
+/**
+ * Looks up the local filesystem path for a cloned repo from the database.
+ * Returns null if the repo has not been indexed locally yet (agentic commands require a
+ * local clone because OpenCode edits files on disk via git worktrees).
+ */
 export async function getLocalRepoPath(repoId: string, pool: unknown): Promise<string | null> {
   try {
     const db = pool as { query: (sql: string, params: unknown[]) => Promise<{ rows: Array<{ repo_path: string | null }> }> }
@@ -53,6 +63,11 @@ export async function gitDiffFiles(repoPath: string, _baseBranch: string): Promi
  * Build an authenticated git remote URL by embedding a token as a password.
  * Mirrors the logic in packages/api/src/git-utils.ts without creating a cross-package dep.
  */
+/**
+ * Embeds a PAT/OAuth token into a git remote URL so that `git fetch` succeeds even after
+ * an OAuth2 JWT has been rotated since the last clone. GitHub uses `x-access-token` as the
+ * username; Azure DevOps uses `oauth2`.
+ */
 export function buildAuthenticatedUrl(repoUrl: string, token: string): string {
   try {
     const url = new URL(repoUrl)
@@ -80,6 +95,13 @@ export interface FixPromptParams {
   worktreePath: string
 }
 
+/**
+ * Builds the prompt sent to OpenCode for the `@ryv fix` command.
+ *
+ * Includes the full user request (all requirements, not just the primary action), the PR
+ * diff for context, the absolute worktree path so OpenCode writes to the isolated checkout,
+ * and the blast-radius caller list so OpenCode knows which interfaces must not break.
+ */
 export function buildFixPrompt(p: FixPromptParams): string {
   const callerSection = p.graphContext?.blastRadius?.callers?.length
     ? `\n## Callers That Must Not Break\nThese functions call the changed symbol. Do not break their interfaces.\n\n${
@@ -135,6 +157,13 @@ export interface TestPromptParams {
   baseBranch: string
 }
 
+/**
+ * Builds the prompt sent to OpenCode for the `@ryv test` command.
+ *
+ * Instructs OpenCode to generate unit tests only — no integration tests, no real HTTP or DB
+ * calls. The framework is auto-detected from package.json. Tests are placed next to source
+ * files and must pass before OpenCode finishes.
+ */
 export function buildTestPrompt(p: TestPromptParams): string {
   const changedFunctions = p.diff.files
     .flatMap(f => f.hunks.map(h => `// ${f.path}\n${h.content}`))

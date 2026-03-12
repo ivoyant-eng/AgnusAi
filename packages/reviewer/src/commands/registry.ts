@@ -17,20 +17,20 @@ export const COMMAND_REGISTRY: CommandDescriptor[] = [
   },
   {
     name: 'review',
-    description: 'Trigger a fresh full review of the PR',
-    examples: ['re-review', 'review this again', 'check this'],
+    description: 'Trigger a fresh full review of the PR — re-runs the complete review pipeline and posts new findings',
+    examples: ['re-review this PR', 'review again', 'run a new review'],
     handler: handleReview,
   },
   {
     name: 'fix',
-    description: 'Autonomously fix a specific issue by opening a companion PR',
-    examples: ['fix this', 'fix the null check', 'fix the bug on line 42', 'fix this error'],
+    description: 'Autonomously fix a specific issue by opening a companion PR with the fix applied',
+    examples: ['fix this', 'fix the null check', 'fix the bug on line 42', 'fix the hardcoded credentials', 'please fix and add proper JSDocs'],
     handler: handleFix,
   },
   {
     name: 'test',
-    description: 'Generate unit tests for the changed code',
-    examples: ['generate tests', 'write unit tests', 'add test cases'],
+    description: 'Generate unit tests for the changed code and open a companion PR',
+    examples: ['generate tests', 'write unit tests', 'add test cases', 'create tests for this', 'test this function'],
     handler: handleTest,
   },
   {

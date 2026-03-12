@@ -173,7 +173,9 @@ async function runFixJob(
     }
 
     const prompt = buildFixPrompt({
-      request: intent.query,
+      // Use the full raw user query (all requirements preserved) rather than the
+      // classifier's potentially-shortened intent.query refinement.
+      request: ctx.userQuery || intent.query,
       prTitle: pr.title,
       prDescription: pr.description,
       diff,

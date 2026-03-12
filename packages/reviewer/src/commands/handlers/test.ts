@@ -23,7 +23,7 @@ export const handleTest: CommandHandler = async (ctx, intent, vcs, llm, graphEnt
   const pr = await vcs.getPR(ctx.prNumber)
 
   const prompt = buildTestPrompt({
-    request: intent.query,
+    request: ctx.userQuery || intent.query,
     prTitle: pr.title,
     diff,
     baseBranch: ctx.baseBranch,
