@@ -41,10 +41,11 @@ export { validateSuggestions } from './review/suggestion-validator';
 export { runSelfReflection } from './review/self-reflection';
 export { detectSplit } from './review/split-detector';
 export { loadBestPractices } from './review/best-practices-loader';
-export { dispatch as dispatchCommand, COMMAND_REGISTRY } from './commands';
+export { dispatchCommand, COMMAND_REGISTRY } from './commands';
 export type { CommandContext, CommandIntent, CommandResult, CommandDescriptor } from './commands/types';
-export { ToolCallCache, SymbolExplorer } from './tools';
+export { ToolCallCache, SymbolExplorer, fetchLibraryDocs } from './tools';
 export type { SymbolGraph, ToolStats } from './tools';
+export { detectLibrariesInDiff } from './review/library-detector';
 
 import { VCSAdapter } from './adapters/vcs/base';
 import { TicketAdapter } from './adapters/ticket/base';
@@ -363,7 +364,7 @@ export class PRReviewAgent {
     }
   }
 
-  async review(prId: string | number, graphContext?: GraphReviewContext, symbolExplorer?: SymbolExplorer): Promise<ReviewResult> {
+  async review(prId: string | number, graphContext?: GraphReviewContext, symbolExplorer?: SymbolExplorer, libraryDocs?: Map<string, string>): Promise<ReviewResult> {
     // Reset checkpoint flag for new review
     this.checkpointHandled = false;
 
@@ -439,6 +440,7 @@ export class PRReviewAgent {
       graphContext,
       bestPractices,
       symbolExplorer,
+      libraryDocs,
     };
 
     // 5. Run review (single-agent or specialist orchestration)

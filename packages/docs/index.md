@@ -38,6 +38,9 @@ features:
   - icon: 🔌
     title: Any LLM, Any Platform
     details: Ollama, OpenAI, Azure OpenAI, Claude, or any OpenAI-compatible endpoint. GitHub and Azure DevOps webhooks. Org-scoped secrets managed without redeployment.
+  - icon: 💬
+    title: "@ryv Commands"
+    details: Write natural language in any PR comment — @ryv fix the null check, @ryv generate tests, @ryv re-review. Runs as background jobs, opens companion PRs, replies when done.
   - icon: 🔒
     title: Privacy by Design
     details: No raw source code stored — only signatures, edges, and embedding vectors. Air-gap compatible with local Ollama. Your code never leaves your infrastructure.

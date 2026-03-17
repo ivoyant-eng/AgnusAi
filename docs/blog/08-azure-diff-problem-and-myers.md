@@ -1,4 +1,4 @@
-# The Algorithm That Powers GitHub — And How We Used It to Fix AgnusAI
+# The Algorithm That Powers GitHub — And How We Used It to Fix RyvAi
 
 > **TL;DR** — Azure DevOps doesn't give you a diff. It gives you two file snapshots and says "figure it out yourself." Our first attempt with LCS worked fine for small files but silently broke on large ones, causing AgnusAI to comment on code that wasn't even changed in the PR. Here's how we caught it, why it happened, and how switching to Myers diff (Git's own algorithm) fixed it.
 
@@ -45,12 +45,12 @@ To get the actual content, you have to:
 
 1. Call the [Iterations API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-iterations?view=azure-devops-rest-7.1) to find the source commit (the PR's latest push) and the merge base commit (where it branched from)
 2. Call the [Items API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/items/get?view=azure-devops-rest-7.1) **twice per file** — once for each commit — to fetch raw file content:
-   ```
+  ```
    GET /_apis/git/repositories/{id}/items
      ?path=/src/components/ActivityComponent/index.tsx
      &versionDescriptor[versionType]=commit
      &versionDescriptor[version]={commitId}
-   ```
+  ```
 3. Compute the diff yourself
 
 So for a PR with 20 changed files, that's 40 API calls just to get file content, plus your own diff computation. GitHub does all of this for you server-side and returns a patch. Azure makes you do it client-side.
@@ -124,12 +124,14 @@ Once we understood the fallback, the cause was obvious. The 600K threshold wasn'
 The right answer is the algorithm Git itself uses: **Myers diff**.
 
 Eugene Myers published it in 1986. It finds the shortest edit script between two sequences in **O(N·D)** time, where:
+
 - `N` = total lines in both files combined
 - `D` = number of actual differences (edit distance)
 
 For a typical PR where only a few dozen lines changed in a 800-line file, `D` is small and the algorithm is extremely fast — far faster than O(m×n) DP even for large files.
 
 The key insight of Myers: instead of building an LCS table, find the **shortest path through an edit graph** where:
+
 - Moving right = delete a line from the old file
 - Moving down = insert a line from the new file
 - Moving diagonally = lines match (free move)
@@ -226,3 +228,4 @@ And as a final safety net, `postReview` validates every comment's line number ag
 - [Azure DevOps: Pull Request Iteration Changes API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/pull-request-iteration-changes/get?view=azure-devops-rest-7.1)
 - [Azure DevOps: Git Items API](https://learn.microsoft.com/en-us/rest/api/azure/devops/git/items/get?view=azure-devops-rest-7.1)
 - [James Coglan's excellent series on Myers diff](https://blog.jcoglan.com/2017/02/12/the-myers-diff-algorithm-part-1/) — best explanation of the algorithm with visualisations
+

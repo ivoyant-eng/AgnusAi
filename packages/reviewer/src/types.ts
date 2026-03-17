@@ -102,6 +102,12 @@ export interface ReviewContext {
    * Each agent should receive its own fork() sharing a session-level ToolCallCache.
    */
   symbolExplorer?: SymbolExplorer;
+  /**
+   * Pre-fetched library docs (populated when CONTEXT7_PREEMPTIVE=true).
+   * Map key: "libraryName@version" or "libraryName". Value: formatted markdown from Context7.
+   * Injected as a ## Library Context section in the prompt.
+   */
+  libraryDocs?: Map<string, string>;
 }
 
 export const AGENT_ROLES = [

@@ -84,6 +84,7 @@ export default defineConfig({
       {
         text: 'Features',
         items: [
+          { text: '@ryv Commands', link: '/reference/commands' },
           { text: 'Multi-Agent Review', link: '/reference/multi-agent' },
           { text: 'Rules System', link: '/reference/rules' },
           { text: 'Token Usage', link: '/reference/token-usage' },

@@ -2,6 +2,8 @@ import type { CommandDescriptor } from './types';
 import { handleAsk } from './handlers/ask';
 import { handleReview } from './handlers/review';
 import { handleHelp } from './handlers/help';
+import { handleFix } from './handlers/fix';
+import { handleTest } from './handlers/test';
 
 const comingSoonHandler = (name: string) =>
   async () => ({ reply: `**@ryv** The \`${name}\` command is coming soon. Stay tuned!` });
@@ -15,15 +17,27 @@ export const COMMAND_REGISTRY: CommandDescriptor[] = [
   },
   {
     name: 'review',
-    description: 'Trigger a fresh full review of the PR',
-    examples: ['re-review', 'review this again', 'check this'],
+    description: 'Trigger a fresh full review of the PR — re-runs the complete review pipeline and posts new findings',
+    examples: ['re-review this PR', 'review again', 'run a new review'],
     handler: handleReview,
   },
   {
+    name: 'fix',
+    description: 'Autonomously fix a specific issue by opening a companion PR with the fix applied',
+    examples: ['fix this', 'fix the null check', 'fix the bug on line 42', 'fix the hardcoded credentials', 'please fix and add proper JSDocs'],
+    handler: handleFix,
+  },
+  {
     name: 'test',
-    description: 'Generate unit tests for the changed code',
-    examples: ['generate tests', 'write unit tests', 'add test cases'],
-    handler: comingSoonHandler('test'),
+    description: 'Generate unit tests for the changed code and open a companion PR',
+    examples: ['generate tests', 'write unit tests', 'add test cases', 'create tests for this', 'test this function'],
+    handler: handleTest,
+  },
+  {
+    name: 'implement',
+    description: 'Autonomously implement a described feature or change by opening a companion PR',
+    examples: ['implement this feature', 'add pagination', 'implement the todo comment'],
+    handler: comingSoonHandler('implement'),
     comingSoon: true,
   },
   {

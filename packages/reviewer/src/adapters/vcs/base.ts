@@ -250,12 +250,46 @@ export interface VCSAdapter {
   
   /**
    * Create a reply to an existing review comment
-   * 
+   *
    * @param prId PR number
    * @param commentId Parent comment ID
    * @param body Reply body
    */
   createReply?(prId: string | number, commentId: string | number, body: string): Promise<void>;
+
+  /**
+   * Get individual comments within a specific conversation thread.
+   *
+   * Azure DevOps: fetches `/threads/{threadId}/comments` — returns each reply in that thread
+   * with the real per-comment ID so they can be ordered against `ctx.commentId`.
+   *
+   * GitHub: no thread concept for issue_comments; returns all PR-level comments (same as
+   * getPRComments). Callers should filter by `id < ctx.commentId` to get prior messages.
+   *
+   * @param prId PR number
+   * @param threadId Azure thread ID (ctx.threadId). Ignored by GitHub.
+   */
+  getThreadComments?(prId: string | number, threadId?: number): Promise<PRComment[]>;
+
+  // ============================================
+  // Agentic Write Operations
+  // ============================================
+
+  /**
+   * Create a new branch from an existing branch
+   */
+  createBranch?(branchName: string, fromBranch: string): Promise<void>
+
+  /**
+   * Commit one or more files to a branch.
+   * Creates or updates each file. Returns the new commit SHA.
+   */
+  commitFiles?(branch: string, files: Array<{ path: string; content: string }>, message: string): Promise<string>
+
+  /**
+   * Open a pull request. Returns the PR URL and number.
+   */
+  openPR?(opts: { title: string; body: string; head: string; base: string }): Promise<{ url: string; number: number }>
 }
 
 /**
@@ -290,4 +324,8 @@ export function hasIncrementalSupport(adapter: VCSAdapter): boolean {
     adapter.getHeadSha &&
     adapter.getIncrementalDiff
   );
+}
+
+export function hasAgenticWriteSupport(adapter: VCSAdapter): boolean {
+  return !!(adapter.createBranch && adapter.commitFiles && adapter.openPR)
 }
