@@ -4,6 +4,20 @@ import type { GraphReviewContext } from '@agnus-ai/shared';
 import { ReviewContext, Diff, ReviewResult } from '../types';
 import { SymbolExplorer } from '../tools/SymbolExplorer';
 
+function serializeLibraryDocs(docs: Map<string, string>): string {
+  const lines = [
+    '\n## Library Context',
+    'The following documentation was pre-fetched for libraries heavily used in this diff.',
+    'Use this context when evaluating API usage in the changed files.\n',
+  ]
+  for (const [lib, content] of docs) {
+    lines.push(`### ${lib}`)
+    lines.push(content)
+    lines.push('')
+  }
+  return lines.join('\n')
+}
+
 export function buildReviewPrompt(context: ReviewContext): string {
   const { pr, diff, skills, config, graphContext } = context;
   const agentRole = context.agentRole;
@@ -18,6 +32,7 @@ export function buildReviewPrompt(context: ReviewContext): string {
     : '';
 
   const graphSection = graphContext ? serializeGraphContext(graphContext, context.symbolExplorer) : '';
+  const libraryDocsSection = context.libraryDocs?.size ? serializeLibraryDocs(context.libraryDocs) : '';
 
   const examplesSection = (graphContext?.priorExamples?.length)
     ? `\n## Examples of feedback your team found helpful\n` +
@@ -61,7 +76,9 @@ export function buildReviewPrompt(context: ReviewContext): string {
   // Context manifest — tells the agent exactly what data it has so it stops hedging.
   const totalAdded = diff.files.reduce((s, f) => s + f.additions, 0);
   const totalRemoved = diff.files.reduce((s, f) => s + f.deletions, 0);
-  const toolsSuffix = context.symbolExplorer ? ', symbol explorer tools available (get_symbol_body, find_callers, find_callees, read_file)' : ''
+  const c7Enabled = context.symbolExplorer?.context7Enabled ?? false
+  const c7Suffix = c7Enabled ? ', get_library_docs' : ''
+  const toolsSuffix = context.symbolExplorer ? `, symbol explorer tools available (get_symbol_body, find_callers, find_callees, read_file${c7Suffix})` : ''
   const graphManifestLine = graphContext
     ? `- Symbol graph: ${graphContext.changedSymbols.length} changed symbols, ` +
       `${graphContext.callers.length} direct callers, ${graphContext.callees.length} direct callees, ` +
@@ -116,7 +133,7 @@ ${fileList}
 
 ## Diff
 ${diffResult.content}
-${graphSection}${bestPracticesSection}${skillContext}${examplesSection}${rejectedSection}${rulesSection}
+${graphSection}${libraryDocsSection}${bestPracticesSection}${skillContext}${examplesSection}${rejectedSection}${rulesSection}
 ${truncationWarning}${roleSection}
 ${contextManifest}
 
@@ -179,9 +196,9 @@ Format: add [Confidence: X.X] at the end of the comment body, where X.X is a dec
 
 Scoring guide:
 - 0.9-1.0: Definite bug, security issue, or clear correctness problem
-- 0.7-0.9: Likely issue with clear impact
-- 0.5-0.7: Potential issue, may be stylistic
-- 0.0-0.5: Speculative — omit these entirely unless critical
+- 0.7-0.9: Likely issue with clear, concrete impact
+- 0.5-0.7: Uncertain — omit unless it's a correctness or safety concern, never for style or readability
+- 0.0-0.5: Speculative — omit entirely
 
 Example:
 [File: /src/auth.ts, Line: 42]
@@ -194,9 +211,14 @@ RULES:
 - ONLY comment on \`[Line N] +\` lines (added lines). Lines prefixed with \`[ctx N]\` are unchanged context lines shown so you can understand surrounding code (e.g. sibling elements) — do NOT place a comment on them. Lines starting with \`-\` are removals — do NOT place a comment on them either.
 - You may use <details>/<summary> for collapsible sections. Inside <details> blocks, use only plain text and bullet lists — never triple-backtick code fences inside <details> as they break rendering on Azure DevOps and other platforms.
 - If the PR looks good output VERDICT: approve with no comments
-- NEVER comment on whether a specific package/library version number is valid, exists, or is outdated. Your training data has a knowledge cutoff and package versions change constantly — you will be wrong. Skip ALL observations about version numbers, semver ranges, or whether a version is "the latest". Focus only on code logic, patterns, and correctness.
+${c7Enabled
+    ? '- Your training data has a knowledge cutoff — do NOT comment on whether a version is current, valid, or "the latest". If you are unsure whether a library API call is correct for the version in use, call `get_library_docs` to check before writing a comment. Never speculate about version-specific behaviour without verifying via the tool.'
+    : '- NEVER comment on whether a specific package/library version number is valid, exists, or is outdated. Your training data has a knowledge cutoff and package versions change constantly — you will be wrong. Skip ALL observations about version numbers, semver ranges, or whether a version is "the latest". Focus only on code logic, patterns, and correctness.'
+  }
 - NEVER write vague advisory comments like "ensure compatibility", "verify this works", "check the documentation", "test thoroughly", or "this may have breaking changes" — these are noise. Only comment if you can point to a specific line of code that will break and explain exactly why.
 - NEVER comment on lock files (pnpm-lock.yaml, package-lock.json, yarn.lock, go.sum, etc.) — they are auto-generated. If the only changed files are lock files and package.json version bumps, output VERDICT: approve with no comments.
+- NEVER comment on changelog files (CHANGELOG.md, CHANGELOG.txt, HISTORY.md, RELEASES.md, etc.) — these are editorial records. Do not flag missing entries, incomplete descriptions, or whether the changelog "matches" the version bump. Skip these files entirely.
+- NEVER write readability, style, or cosmetic comments. This includes: variable/function naming preferences, code formatting, comment wording, log message phrasing, minor restructuring suggestions ("you could extract this into a helper"), and low-impact micro-optimizations. Developers consistently rate these as noise. Only comment if there is a concrete correctness bug, a security issue, missing error handling, or a clear violation of an established best practice with measurable impact.
 - NEVER mention "blast radius", "graph context", "codebase context", or any internal tooling concepts in your review comments. Use the codebase context section only to understand impact — your comments must read as if written by a human reviewer who knows the codebase.
 - UI Permission Attribution: When flagging a missing permission check on a UI element (button, action, menu item), reference the line where the disabled/enabled prop (e.g. \`buttonDisabled\`, \`disabled\`, \`isDisabled\`) is set in the render config — NOT the callback function it invokes. The callback is irrelevant to the authorization gap; the unconditional prop is the finding.
 - UI Permission Consistency: If context lines show sibling buttons or actions in the same list/array where some apply \`hasPermission()\`, \`can()\`, or similar guards on their disabled state and others do not, flag the ungated element. A hardcoded \`buttonDisabled: false\` next to a properly-gated sibling is an access control bug.`;
@@ -253,7 +275,7 @@ export function serializeGraphContext(ctx: GraphReviewContext, explorer?: Symbol
   }
 
   if (explorer) {
-    lines.push('\n' + SymbolExplorer.toolDescriptionPrompt());
+    lines.push('\n' + SymbolExplorer.toolDescriptionPrompt(explorer.context7Enabled));
   }
 
   return lines.join('\n') + '\n';
@@ -337,6 +359,12 @@ const SKIP_FILE_PATTERNS = [
   /^Cargo\.lock$/,
   /\.tsbuildinfo$/,
   /\.snap$/, // jest snapshots
+  // Changelog / release notes — editorial records, not reviewable code
+  /^CHANGELOG(\.\w+)?$/i,
+  /^CHANGES(\.\w+)?$/i,
+  /^HISTORY(\.\w+)?$/i,
+  /^RELEASES(\.\w+)?$/i,
+  /^RELEASE_NOTES(\.\w+)?$/i,
 ]
 
 export function shouldSkipFile(path: string): boolean {
