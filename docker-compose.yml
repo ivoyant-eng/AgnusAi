@@ -34,6 +34,11 @@ services:
       # Symbol explorer tools
       - TOOL_DEBUG=${TOOL_DEBUG:-false}
       - AGENT_TOOL_MAX_ROUNDS=${AGENT_TOOL_MAX_ROUNDS:-}
+      # Context7 library docs tool
+      - CONTEXT7_ENABLED=${CONTEXT7_ENABLED:-false}
+      - CONTEXT7_API_KEY=${CONTEXT7_API_KEY:-}
+      - CONTEXT7_MAX_TOKENS=${CONTEXT7_MAX_TOKENS:-4000}
+      - CONTEXT7_PREEMPTIVE=${CONTEXT7_PREEMPTIVE:-false}
       - JUDGE_ENABLED=${JUDGE_ENABLED:-true}
       - JUDGE_MODE=${JUDGE_MODE:-llm}
       - SELF_REFLECTION_ENABLED=${SELF_REFLECTION_ENABLED:-false}
