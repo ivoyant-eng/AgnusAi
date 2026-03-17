@@ -662,7 +662,7 @@ export class PRReviewAgent {
       ? `quality: ${score}/100${score < 60 ? ' ⚠️' : ''}`
       : null;
     const labelsWithScore = publishLabels
-      ? [...description.labels, ...(scoreLabel ? [scoreLabel] : [])]
+      ? [...description.labels.slice(0, 3), ...(scoreLabel ? [scoreLabel] : [])]
       : [];
 
     await this.vcs.updatePRDescription!(prId, {

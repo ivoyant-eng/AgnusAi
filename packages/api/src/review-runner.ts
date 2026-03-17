@@ -757,8 +757,10 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
   const shouldRunForAction = prSettings.updateMode === 'created_and_updated'
     ? (action === 'created' || action === 'updated' || action === 'opened' || action === 'synchronize' || action === 'manual')
     : (action === 'created' || action === 'opened' || action === 'manual')
+  // PR description/title/labels are now command-driven (@AI Agents write PR description).
+  // Auto-update only runs when explicitly requested (updatePRDescription: true via manual API call).
   const shouldUpdatePRDescription =
-    (opts.updatePRDescription ?? true) &&
+    (opts.updatePRDescription === true) &&
     prSettings.enabled &&
     shouldRunForAction
 
