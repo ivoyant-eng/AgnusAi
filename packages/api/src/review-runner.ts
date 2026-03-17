@@ -225,21 +225,34 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     })
   }
 
-  // 3. GitHub + non-incremental Azure (created events)
-  const result = await executeReview(opts, vcs, pool)
-
-  // 4. Save iteration for Azure created event so the first updated event is correctly gated
-  if (platform === 'azure' && azureAdapter && !opts.dryRun) {
-    try {
-      const latestIteration = await azureAdapter.getLatestIterationId(prNumber)
-      await saveLastReviewedIteration(pool, repoId, prNumber, latestIteration)
-      console.log(`[review-runner] Azure PR ${prNumber} (created): saved last_reviewed_iteration=${latestIteration}`)
-    } catch (err) {
-      console.error(`[review-runner] Azure PR ${prNumber} (created): FAILED to save iteration state:`, (err as Error).message)
-    }
+  // 3. Azure created events — use the same per-PR lock as the updated path.
+  // ADO fires both git.pullrequest.created AND git.pullrequest.updated within milliseconds
+  // when reviewers are added at PR open time. Without this lock both paths ran independently
+  // and posted duplicate comment sets. Whichever event wins the lock reviews first; the
+  // second finds last_reviewed_iteration > 0 and exits as a no-op.
+  if (platform === 'azure' && azureAdapter) {
+    return withPRLock(`${repoId}:${prNumber}`, async () => {
+      const lastReviewed = await getLastReviewedIteration(pool, repoId, prNumber)
+      if (lastReviewed > 0) {
+        console.log(`[review-runner] Azure PR ${prNumber} (created): already reviewed (iteration=${lastReviewed}) — skipping duplicate`)
+        return { verdict: 'comment', commentCount: 0, reviewId: '' }
+      }
+      const result = await executeReview(opts, vcs, pool)
+      if (!opts.dryRun) {
+        try {
+          const latestIteration = await azureAdapter!.getLatestIterationId(prNumber)
+          await saveLastReviewedIteration(pool, repoId, prNumber, latestIteration)
+          console.log(`[review-runner] Azure PR ${prNumber} (created): saved last_reviewed_iteration=${latestIteration}`)
+        } catch (err) {
+          console.error(`[review-runner] Azure PR ${prNumber} (created): FAILED to save iteration state:`, (err as Error).message)
+        }
+      }
+      return result
+    })
   }
 
-  return result
+  // 4. GitHub (no lock needed — GitHub sends exactly one event per PR action)
+  return await executeReview(opts, vcs, pool)
 }
 
 /**

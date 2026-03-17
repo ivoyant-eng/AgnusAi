@@ -16,6 +16,8 @@ export interface CommandContext {
   userQuery: string;
   /** Full original comment body */
   rawMention: string;
+  /** The @mention string the user typed to trigger the bot, e.g. "@AI Agents" or "@ryv" */
+  botMention?: string;
   /** Opaque DB pool passed through from API layer — typed as unknown to avoid pg dependency in reviewer */
   pool: unknown;
 }
