@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'fs'
 import { exec, type ExecException } from 'child_process'
 import { promisify } from 'util'
 import crypto from 'crypto'
+import { nanoid } from 'nanoid'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { Pool } from 'pg'
 
@@ -436,8 +437,12 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
     const indexBranches = (branches && branches.length > 0) ? branches : ['main']
 
-    // Derive a stable repoId from the URL
-    const repoId = Buffer.from(repoUrl).toString('base64url').slice(0, 32)
+    // Look up existing repo by URL first — reuse its ID so re-adding the same repo
+    // is idempotent. If new, generate a nanoid (21 chars, URL-safe, < Fastify's maxParamLength).
+    const { rows: existingRows } = await pool.query<{ repo_id: string }>(
+      `SELECT repo_id FROM repos WHERE repo_url = $1 LIMIT 1`, [repoUrl]
+    )
+    const repoId = existingRows[0]?.repo_id ?? nanoid(21)
 
     // If connecting via a saved VCS installation, pull credentials from it
     let githubAppId = rawGithubAppId
