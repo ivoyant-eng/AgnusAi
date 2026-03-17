@@ -3,6 +3,7 @@ import path from 'path'
 import type { ParsedSymbol } from '@agnus-ai/shared'
 import type { ToolCallCache } from './ToolCallCache'
 import type { Diff } from '../types'
+import { fetchLibraryDocs } from './Context7Client'
 
 const BODY_MAX_LINES = 80
 const FILE_MAX_LINES = 200
@@ -36,12 +37,17 @@ export class SymbolExplorer {
   private _rounds = 0
   private readonly _breakdown = new Map<string, { calls: number; cacheHits: number }>()
 
+  /** Versions map passed in when CONTEXT7_ENABLED=true. Undefined = feature off. */
+  readonly libraryVersions: Map<string, string | undefined> | undefined
+
   constructor(
     private readonly graph: SymbolGraph,
     private readonly repoPath: string,
     private readonly diff: Diff,
     private readonly cache: ToolCallCache,
+    libraryVersions?: Map<string, string | undefined>,
   ) {
+    this.libraryVersions = libraryVersions
     // Build changed-line index from the diff for ★ annotation in read_file
     this.changedLines = new Map()
     for (const file of diff.files) {
@@ -74,9 +80,14 @@ export class SymbolExplorer {
     }
   }
 
+  /** True when Context7 library docs tool is available (CONTEXT7_ENABLED=true). */
+  get context7Enabled(): boolean {
+    return this.libraryVersions !== undefined
+  }
+
   /** Create a sibling explorer sharing the same cache but with fresh stats. */
   fork(): SymbolExplorer {
-    return new SymbolExplorer(this.graph, this.repoPath, this.diff, this.cache)
+    return new SymbolExplorer(this.graph, this.repoPath, this.diff, this.cache, this.libraryVersions)
   }
 
   /** Called by the tool loop to signal a new LLM round started. */
@@ -127,6 +138,13 @@ export class SymbolExplorer {
             String(args.file_path ?? ''),
             args.start_line !== undefined ? Number(args.start_line) : undefined,
             args.end_line !== undefined ? Number(args.end_line) : undefined,
+          )
+          break
+        case 'get_library_docs':
+          result = await this.getLibraryDocs(
+            String(args.library ?? ''),
+            String(args.query ?? ''),
+            args.version !== undefined ? String(args.version) : undefined,
           )
           break
         default:
@@ -256,6 +274,19 @@ export class SymbolExplorer {
     return [...header, '', ...annotated].join('\n')
   }
 
+  private async getLibraryDocs(library: string, query: string, version?: string): Promise<string> {
+    if (!library) return 'Error: library is required.'
+    if (!query) return 'Error: query is required.'
+    if (!this.libraryVersions) {
+      return 'Context7 is not enabled (CONTEXT7_ENABLED is not set). Use get_symbol_body for internal code instead.'
+    }
+    // Auto-resolve version from detected package.json versions if not specified by LLM
+    const resolvedVersion = version ?? this.libraryVersions.get(library)
+    const apiKey = process.env.CONTEXT7_API_KEY
+    const maxTokens = parseInt(process.env.CONTEXT7_MAX_TOKENS ?? '4000', 10)
+    return fetchLibraryDocs(library, query, resolvedVersion, apiKey, maxTokens)
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   private resolveSymbol(symbolId: string): ParsedSymbol | undefined {
@@ -266,7 +297,20 @@ export class SymbolExplorer {
   }
 
   /** Prompt text describing available tools — injected into the graph context section. */
-  static toolDescriptionPrompt(): string {
+  static toolDescriptionPrompt(showLibraryDocs = false): string {
+    const libraryDocsSection = showLibraryDocs ? `
+
+get_library_docs — Fetch up-to-date documentation for an external npm package from Context7.
+  Use for EXTERNAL npm package calls in the diff — not for internal project code.
+  library: npm package name (e.g. "prisma", "axios", "next", "express")
+  query:   what you want to verify (e.g. "findFirst uniqueness guarantee", "cache options")
+  version: optional — auto-resolved from package.json if omitted
+  Returns: current API documentation and code examples from the official library docs.
+  Example: <tool_call>{"tool": "get_library_docs", "args": {"library": "prisma", "query": "findFirst vs findUnique correctness"}}</tool_call>
+
+  Use get_symbol_body for internal/project-defined code.
+  Use get_library_docs for imported npm packages.` : ''
+
     return `
 ### Codebase Explorer (USE THESE BEFORE WRITING COMMENTS)
 You MUST use at least one tool before submitting findings. The diff alone is not enough — you need to see the full context of changed functions and their callers to assess real impact.
@@ -290,7 +334,7 @@ find_callees — See what a symbol calls. Reveals dependencies.
 read_file — Read the full source of any file. Lines marked ★ are changed in this PR.
   Example: <tool_call>{"tool": "read_file", "args": {"file_path": "app/api/hints/route.ts"}}</tool_call>
   For large files: <tool_call>{"tool": "read_file", "args": {"file_path": "app/api/hints/route.ts", "start_line": 50, "end_line": 150}}</tool_call>
-
+${libraryDocsSection}
 **CRITICAL RULES:**
 - Call at least one tool before writing your review findings.
 - Use the symbol IDs from "Symbols changed in this PR" above as starting points.
