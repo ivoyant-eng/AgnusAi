@@ -124,10 +124,19 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: 'Invalid webhook secret' })
     }
     const payload = req.body as Record<string, unknown>
-    const repoUrl = (payload.resource as any)?.repository?.remoteUrl as string | undefined
+    const resource = payload.resource as any
+    const repoUrl = (resource?.repository?.remoteUrl ?? resource?.pullRequest?.repository?.remoteUrl) as string | undefined
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl, orgSlug)
     if (!repoId) return reply.status(200).send({ ok: true })
+
+    // @ryv command — intercept PR comment events
+    if (payload.eventType === 'ms.vss-code.git-pullrequest-comment-event') {
+      const result = await handleRyvCommandAzure(payload, repoId, repoUrl, pool)
+      if (result) return reply.status(202).send({ status: 'command accepted' })
+      return reply.status(200).send({ ok: true })
+    }
+
     const prEvent = await normalizeAzureEvent(payload, repoId, repoUrl, pool)
     await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
@@ -168,10 +177,19 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(401).send({ error: 'Invalid webhook secret' })
     }
     const payload = req.body as Record<string, unknown>
-    const repoUrl = (payload.resource as any)?.repository?.remoteUrl as string | undefined
+    const resource = payload.resource as any
+    const repoUrl = (resource?.repository?.remoteUrl ?? resource?.pullRequest?.repository?.remoteUrl) as string | undefined
     if (!repoUrl) return reply.status(200).send({ ok: true })
     const repoId = await resolveRepoId(repoUrl)
     if (!repoId) return reply.status(200).send({ ok: true })
+
+    // @ryv command — intercept PR comment events
+    if (payload.eventType === 'ms.vss-code.git-pullrequest-comment-event') {
+      const result = await handleRyvCommandAzure(payload, repoId, repoUrl, pool)
+      if (result) return reply.status(202).send({ status: 'command accepted' })
+      return reply.status(200).send({ ok: true })
+    }
+
     const prEvent = await normalizeAzureEvent(payload, repoId, repoUrl, pool)
     await dispatchPREvent(prEvent, pool)
     return reply.status(200).send({ ok: true })
@@ -180,7 +198,66 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
 
 // ─── @ryv / /ask command handler ─────────────────────────────────────────────
 
-const RYV_BOT_NAME = process.env.RYV_BOT_NAME ?? 'ryv'
+// Support comma-separated list: RYV_BOT_NAME=ryv,AI Agents,agnus
+// Any of the names triggers the bot. Auto-resolved names from token lookup are appended at runtime.
+const RYV_BOT_NAMES: string[] = (process.env.RYV_BOT_NAME ?? 'ryv')
+  .split(',')
+  .map(n => n.trim())
+  .filter(Boolean)
+
+// Cache of token → resolved display name (to avoid repeated API calls)
+const resolvedBotNames = new Map<string, string>()
+
+/**
+ * Resolve the display name of the account that owns `token` via the VCS platform API.
+ * Result is cached per token. Errors are silently swallowed — fallback to configured names.
+ *
+ * For Azure DevOps: GET https://app.vssps.visualstudio.com/_apis/profile/me
+ * For GitHub: GET https://api.github.com/user
+ */
+async function resolveBotDisplayName(token: string, platform: 'azure' | 'github', orgUrl?: string): Promise<string | null> {
+  if (resolvedBotNames.has(token)) return resolvedBotNames.get(token)!
+  try {
+    let displayName: string | null = null
+    if (platform === 'azure') {
+      // connectionData returns the authenticated user without requiring a specific api-version.
+      // Works with both PATs and OAuth tokens. orgUrl extracted from the repo URL.
+      const base = orgUrl ?? 'https://dev.azure.com'
+      const res = await fetch(`${base}/_apis/connectionData`, {
+        headers: { Authorization: `Basic ${Buffer.from(`:${token}`).toString('base64')}` },
+      })
+      if (res.ok) {
+        const data = await res.json() as { authenticatedUser?: { providerDisplayName?: string } }
+        displayName = data.authenticatedUser?.providerDisplayName ?? null
+      }
+    } else {
+      const res = await fetch('https://api.github.com/user', {
+        headers: { Authorization: `Bearer ${token}`, 'User-Agent': 'agnus-ai' },
+      })
+      if (res.ok) {
+        const data = await res.json() as { login?: string; name?: string }
+        displayName = data.name ?? data.login ?? null
+      }
+    }
+    if (displayName) resolvedBotNames.set(token, displayName)
+    return displayName
+  } catch {
+    return null
+  }
+}
+
+async function isBotMentioned(text: string, token?: string, platform?: 'azure' | 'github', orgUrl?: string): Promise<boolean> {
+  const lower = text.toLowerCase()
+  // Check statically configured names first (fast path, no network call)
+  if (RYV_BOT_NAMES.some(name => lower.includes(`@${name.toLowerCase()}`))) return true
+  // Auto-resolve: check if the token owner's display name is mentioned
+  if (token && platform) {
+    const resolved = await resolveBotDisplayName(token, platform, orgUrl)
+    if (resolved && lower.includes(`@${resolved.toLowerCase()}`)) return true
+  }
+  return false
+}
+
 const COMMANDS_ENABLED = (process.env.COMMANDS_ENABLED ?? 'true').toLowerCase() !== 'false'
 
 async function handleRyvCommand(
@@ -193,12 +270,21 @@ async function handleRyvCommand(
   if (!COMMANDS_ENABLED) return false
 
   const body = (payload.comment as any)?.body?.trim() ?? ''
-  const isRyvMention = body.includes(`@${RYV_BOT_NAME}`)
   const isLegacyAsk  = body.startsWith('/ask ')
 
+  if (!isLegacyAsk) {
+    // Only respond to PR issue comments (not plain issue comments on repos)
+    const issue = payload.issue as any
+    if (!issue?.pull_request) return false
+  }
+
+  // Resolve token early so we can auto-detect the bot's account display name
+  const repoCreds = await getRepoCreds(pool, repoId)
+  const token = repoCreds.token
+
+  const isRyvMention = await isBotMentioned(body, token ?? undefined, platform)
   if (!isRyvMention && !isLegacyAsk) return false
 
-  // Only respond to PR issue comments (not plain issue comments on repos)
   const issue = payload.issue as any
   if (!issue?.pull_request) return false
 
@@ -206,23 +292,77 @@ async function handleRyvCommand(
   const commentId = (payload.comment as any)?.id as number
   const baseBranch = (issue.pull_request as any)?.base?.ref ?? 'main'
 
-  const repoCreds = await getRepoCreds(pool, repoId)
-  const token = repoCreds.token
+  const triggerReview = async (): Promise<void> => { await runReview({
+    platform, repoId, repoUrl, prNumber, baseBranch,
+    token, pool,
+    githubAppId: repoCreds.githubAppId,
+    githubAppPrivateKey: repoCreds.githubAppPrivateKey,
+    githubAppInstallationId: repoCreds.githubAppInstallationId,
+    vcsInstallationId: repoCreds.vcsInstallationId,
+  }) }
 
   if (isLegacyAsk) {
     // Backward-compatible: route /ask directly to ask handler, skip NLP
     const question = body.slice('/ask '.length).trim()
     if (!question) return false
     setImmediate(() =>
-      runCommand({ platform, repoId, repoUrl, prNumber, commentId, token, baseBranch, rawBody: body, pool, forceCommand: 'ask' })
+      runCommand({ platform, repoId, repoUrl, prNumber, commentId, token, baseBranch, rawBody: body, pool, forceCommand: 'ask', triggerReview })
         .catch(err => console.error('[command-runner] Error:', (err as Error).message))
     )
   } else {
     setImmediate(() =>
-      runCommand({ platform, repoId, repoUrl, prNumber, commentId, token, baseBranch, rawBody: body, pool })
+      runCommand({ platform, repoId, repoUrl, prNumber, commentId, token, baseBranch, rawBody: body, pool, triggerReview })
         .catch(err => console.error('[command-runner] Error:', (err as Error).message))
     )
   }
+  return true
+}
+
+/** Handle Azure DevOps ms.vss-code.git-pullrequest-comment-event for @ryv commands */
+async function handleRyvCommandAzure(
+  payload: Record<string, unknown>,
+  repoId: string,
+  repoUrl: string,
+  pool: Pool,
+): Promise<boolean> {
+  if (!COMMANDS_ENABLED) return false
+
+  const resource = payload.resource as any
+  const comment = resource?.comment
+  const body = (comment?.content ?? '').trim()
+
+  const pr = resource?.pullRequest
+  const prNumber = (pr?.pullRequestId ?? resource?.pullRequestId) as number
+  if (!prNumber) return false
+
+  const commentId = comment?.id as number
+  const threadId = (resource?.threadId ?? resource?.pullRequestThreadContext?.trackingCriteria?.firstComparingIteration) as number | undefined
+  const baseBranch = (pr?.targetRefName ?? '').replace('refs/heads/', '') || 'main'
+
+  // Fetch token first so we can auto-resolve the bot's display name for mention detection
+  const repoCreds = await getRepoCreds(pool, repoId)
+  const token = repoCreds.token
+
+  // Extract org URL (https://dev.azure.com/org) from the repo URL for connectionData lookup
+  let orgUrl: string | undefined
+  try {
+    const u = new URL(repoUrl)
+    const orgPart = u.pathname.split('/').filter(Boolean)[0]
+    orgUrl = `${u.origin}/${orgPart}`
+  } catch { /* fallback to default */ }
+
+  if (!await isBotMentioned(body, token ?? undefined, 'azure', orgUrl)) return false
+
+  const triggerReview = async (): Promise<void> => { await runReview({
+    platform: 'azure', repoId, repoUrl, prNumber, baseBranch,
+    token, pool,
+    vcsInstallationId: repoCreds.vcsInstallationId,
+  }) }
+
+  setImmediate(() =>
+    runCommand({ platform: 'azure', repoId, repoUrl, prNumber, commentId, threadId, token, baseBranch, rawBody: body, pool, triggerReview })
+      .catch(err => console.error('[command-runner] Error:', (err as Error).message))
+  )
   return true
 }
 

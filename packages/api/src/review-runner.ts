@@ -6,7 +6,7 @@ import crypto from 'crypto'
 import path from 'path'
 import { PRReviewAgent, GitHubAdapter, AzureDevOpsAdapter, createBackendFromEnv, JiraAdapter, LinearAdapter, AzureBoardsAdapter, GitHubIssuesAdapter } from '@agnus-ai/reviewer'
 import type { Config } from '@agnus-ai/reviewer'
-import { ToolCallCache, SymbolExplorer } from '@agnus-ai/reviewer'
+import { ToolCallCache, SymbolExplorer, fetchLibraryDocs, detectLibrariesInDiff } from '@agnus-ai/reviewer'
 import type { Pool } from 'pg'
 
 // Skills bundled with the reviewer package
@@ -242,6 +242,31 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
   return result
 }
 
+/**
+ * Pre-fetches library docs for the top detected libraries before the LLM sees the prompt.
+ * Called when CONTEXT7_PREEMPTIVE=true. Saves one tool-call round for heavily-used libraries.
+ */
+async function prefetchTopLibraryDocs(
+  libraryVersions: Map<string, string | undefined>,
+): Promise<Map<string, string>> {
+  const apiKey = process.env.CONTEXT7_API_KEY
+  const maxTokens = parseInt(process.env.CONTEXT7_MAX_TOKENS ?? '4000', 10)
+  const docs = new Map<string, string>()
+  // Prefetch top 2 libraries (first entries in the map, ordered by detection)
+  const entries = Array.from(libraryVersions.entries()).slice(0, 2)
+  for (const [lib, version] of entries) {
+    try {
+      const content = await fetchLibraryDocs(lib, 'common API usage and patterns', version, apiKey, maxTokens)
+      const key = version ? `${lib}@${version}` : lib
+      docs.set(key, content)
+      console.log(`[context7] preemptive fetch: ${key} (${content.length} chars)`)
+    } catch (err) {
+      console.warn(`[context7] preemptive fetch failed for "${lib}":`, (err as Error).message)
+    }
+  }
+  return docs
+}
+
 async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; comments?: any[] }> {
   const { platform, repoId, prNumber, baseBranch } = opts
 
@@ -341,6 +366,7 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
   // Assemble graph context from the base branch's graph (gracefully degraded if not indexed)
   let graphContext: GraphReviewContext | undefined
   let symbolExplorer: SymbolExplorer | undefined
+  let libraryDocs: Map<string, string> | undefined
   const entry = getRepo(repoId, baseBranch)
   if (entry && diffString) {
     graphContext = await entry.retriever.getReviewContext(diffString, repoId)
@@ -352,8 +378,24 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
     const repoPath = repoPathRow.rows[0]?.repo_path
     if (repoPath) {
       const sessionCache = new ToolCallCache()
-      symbolExplorer = new SymbolExplorer(entry.graph as any, repoPath, await buildDiff(vcs, prNumber), sessionCache)
+      const diffObj = await buildDiff(vcs, prNumber)
+
+      let libraryVersions: Map<string, string | undefined> | undefined
+      if (process.env.CONTEXT7_ENABLED === 'true') {
+        try {
+          libraryVersions = await detectLibrariesInDiff(diffObj, repoPath)
+          console.log(`[context7] detected ${libraryVersions.size} librar${libraryVersions.size === 1 ? 'y' : 'ies'} in diff`)
+        } catch (err) {
+          console.warn('[context7] library detection failed:', (err as Error).message)
+        }
+      }
+
+      symbolExplorer = new SymbolExplorer(entry.graph as any, repoPath, diffObj, sessionCache, libraryVersions)
       console.log(`[tools] SymbolExplorer ready — graph has ${entry.graph.getAllSymbols().length} symbols, repoPath=${repoPath}`)
+
+      if (process.env.CONTEXT7_ENABLED === 'true' && process.env.CONTEXT7_PREEMPTIVE === 'true' && libraryVersions?.size) {
+        libraryDocs = await prefetchTopLibraryDocs(libraryVersions)
+      }
     }
   }
 
@@ -439,7 +481,7 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
 
   const result = opts.incrementalReview && platform === 'github'
     ? await agent.incrementalReview(prNumber, {}, graphContext, symbolExplorer)
-    : await agent.review(prNumber, graphContext, symbolExplorer)
+    : await agent.review(prNumber, graphContext, symbolExplorer, libraryDocs)
   const agentTelemetry = Array.isArray((result as any).agentTelemetry)
     ? (result as any).agentTelemetry
     : []

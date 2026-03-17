@@ -136,6 +136,27 @@ See [Rules System](/reference/rules) for full details.
 | `DASHBOARD_DIST` | auto-resolved | Path to built dashboard static files. Set automatically in Docker. |
 | `DOCS_DIST` | auto-resolved | Path to built VitePress docs. Set automatically in Docker. |
 
+## @ryv Commands
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `COMMANDS_ENABLED` | `true` | Master toggle. Set `false` to disable all `@ryv` commands globally (webhooks still run reviews). |
+| `RYV_BOT_NAME` | `ryv` | Comma-separated list of account names that trigger commands. Auto-detection appends the service account display name at runtime. Example: `ryv,AI Agents,agnus`. |
+| `COMMAND_MAX_PER_HOUR` | `10` | Max `@ryv` commands per PR per hour (anti-abuse). |
+
+See [@ryv Commands](/reference/commands) for full details.
+
+## OpenCode Sidecar
+
+Required for `@ryv fix` and `@ryv test` commands. OpenCode is an agentic code-editing service that runs as a Docker sidecar.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENCODE_URL` | `http://opencode:4096` | URL of the OpenCode sidecar. Leave unset if not using agentic commands. |
+| `OPENCODE_SERVER_PASSWORD` | — | Password for the OpenCode HTTP server. Set the same value in OpenCode's config. |
+| `OPENCODE_PROVIDER_ID` | `opencode` | LLM provider OpenCode uses for agentic tasks. Built-in free proxy: `opencode`. |
+| `OPENCODE_MODEL_ID` | `big-pickle` | Model for agentic tasks. OpenCode built-ins: `big-pickle`, `gpt-5-nano`, `mimo-v2-flash-free`. |
+
 ## VCS Tokens
 
 | Variable | Description |

@@ -15,7 +15,11 @@ import {
 import type { CommandContext } from '@agnus-ai/reviewer';
 import { getRepo } from './graph-cache';
 
-const RYV_BOT_NAME = process.env.RYV_BOT_NAME ?? 'ryv';
+// Support comma-separated names: RYV_BOT_NAME=ryv,AI Agents,agnus
+const RYV_BOT_NAMES: string[] = (process.env.RYV_BOT_NAME ?? 'ryv')
+  .split(',')
+  .map(n => n.trim())
+  .filter(Boolean);
 const COMMAND_MAX_PER_HOUR = parseInt(process.env.COMMAND_MAX_PER_HOUR ?? '10', 10);
 
 // ─── Rate limiter ─────────────────────────────────────────────────────────────
@@ -66,10 +70,14 @@ export async function runCommand(opts: RunCommandOptions): Promise<void> {
     return;
   }
 
-  // Extract query: text after @ryv, or legacy /ask body
+  // Extract query: strip the @<botname> prefix (any configured name, case-insensitive).
   let userQuery = rawBody;
-  if (rawBody.includes(`@${RYV_BOT_NAME}`)) {
-    userQuery = rawBody.split(`@${RYV_BOT_NAME}`).slice(1).join('').trim();
+  const matchedName = RYV_BOT_NAMES.find(n =>
+    rawBody.toLowerCase().includes(`@${n.toLowerCase()}`)
+  );
+  if (matchedName) {
+    const idx = rawBody.toLowerCase().indexOf(`@${matchedName.toLowerCase()}`);
+    userQuery = rawBody.slice(idx + matchedName.length + 1).trim();
   }
 
   const ctx: CommandContext = {

@@ -586,9 +586,18 @@ export class GitHubAdapter implements VCSAdapter {
   }
 
   /**
+   * GitHub has no thread concept for issue_comments — all PR-level comments are flat.
+   * This is equivalent to getPRComments; the threadId parameter is ignored.
+   * Callers should filter by id < ctx.commentId to narrow to prior messages.
+   */
+  async getThreadComments(prId: string | number, _threadId?: number): Promise<PRComment[]> {
+    return this.getPRComments(prId);
+  }
+
+  /**
    * Get all review comments on a PR (inline comments on code)
    * Handles pagination to fetch ALL comments
-   * 
+   *
    * @param prId PR number
    * @returns List of detailed review comments
    */
@@ -984,6 +993,58 @@ export class GitHubAdapter implements VCSAdapter {
     } catch {
       return null;
     }
+  }
+
+  // ============================================
+  // Agentic Write Operations
+  // ============================================
+
+  async createBranch(branchName: string, fromBranch: string): Promise<void> {
+    const { data: ref } = await this.octokit.git.getRef({
+      owner: this.owner, repo: this.repo,
+      ref: `heads/${fromBranch}`,
+    })
+    await this.octokit.git.createRef({
+      owner: this.owner, repo: this.repo,
+      ref: `refs/heads/${branchName}`,
+      sha: ref.object.sha,
+    })
+  }
+
+  async commitFiles(branch: string, files: Array<{ path: string; content: string }>, message: string): Promise<string> {
+    let lastSha = ''
+    for (const file of files) {
+      let existingSha: string | undefined
+      try {
+        const { data } = await this.octokit.repos.getContent({
+          owner: this.owner, repo: this.repo,
+          path: file.path, ref: branch,
+        })
+        if ('sha' in data) existingSha = data.sha
+      } catch { /* new file */ }
+
+      const { data } = await this.octokit.repos.createOrUpdateFileContents({
+        owner: this.owner, repo: this.repo,
+        path: file.path,
+        message,
+        content: Buffer.from(file.content).toString('base64'),
+        branch,
+        ...(existingSha ? { sha: existingSha } : {}),
+      })
+      lastSha = data.commit.sha ?? ''
+    }
+    return lastSha
+  }
+
+  async openPR(opts: { title: string; body: string; head: string; base: string }): Promise<{ url: string; number: number }> {
+    const { data } = await this.octokit.pulls.create({
+      owner: this.owner, repo: this.repo,
+      title: opts.title,
+      body: opts.body,
+      head: opts.head,
+      base: opts.base,
+    })
+    return { url: data.html_url, number: data.number }
   }
 }
 

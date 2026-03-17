@@ -92,6 +92,31 @@ Every comment the LLM generates includes a `[Confidence: X.X]` self-assessment. 
 | `standard` | 2-hop BFS | No | Default — balanced cost/quality |
 | `deep` | 2-hop BFS | pgvector semantic search | Large codebases, critical paths |
 
+### @ryv Command System
+
+Write natural language in any PR comment and Ryv acts on it. A small LLM classification step routes to the right handler — no syntax to memorize.
+
+```
+@ryv fix the hardcoded credentials
+@ryv what does this function do?
+@ryv generate tests for the changed files
+@ryv re-review this PR
+```
+
+| Command | What it does |
+|---------|-------------|
+| `@ryv ask` | Q&A about the PR or codebase using graph context |
+| `@ryv fix` | Autonomously applies the fix and opens a companion PR |
+| `@ryv test` | Generates unit tests and opens a PR |
+| `@ryv review` | Triggers a fresh full review |
+| `@ryv help` | Lists all commands |
+
+The `fix` and `test` commands run as **async background jobs** — Ryv replies immediately ("⚙️ Working on it…"), then posts a follow-up with the PR URL when done.
+
+Bot name auto-detection: Ryv resolves your service account's display name from the platform API so `@AI Agents fix this` works without any extra configuration.
+
+→ [Full command reference](/reference/commands)
+
 ### Token Usage Tracking
 
 Ryv tracks LLM token consumption per agent, per repository, and per day — aggregated at the org level. View usage with custom date ranges in **Settings → Token Usage** or via the API.

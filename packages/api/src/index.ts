@@ -695,6 +695,26 @@ async function main() {
   await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_oauth_state TEXT`)
   await pool.query(`ALTER TABLE vcs_installations ADD COLUMN IF NOT EXISTS azure_redirect_uri TEXT`)
 
+  // Fix jobs — background agentic fix tasks (async job lifecycle)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fix_jobs (
+      id            TEXT PRIMARY KEY,
+      repo_id       TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
+      pr_number     INT  NOT NULL,
+      platform      TEXT NOT NULL,
+      thread_id     INT,
+      comment_id    INT  NOT NULL,
+      status        TEXT NOT NULL DEFAULT 'pending',
+      worktree_path TEXT,
+      branch_name   TEXT,
+      pr_url        TEXT,
+      error         TEXT,
+      created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `)
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fix_jobs_repo_pr ON fix_jobs(repo_id, pr_number, status)`)
+
   app.log.info('Database schema migrated')
   await seedAdminUser(pool)
 

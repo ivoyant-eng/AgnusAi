@@ -957,6 +957,50 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   }
 
   /**
+   * Returns all individual comments within a specific Azure thread so the ask handler can
+   * reconstruct the conversation history for that thread only.
+   *
+   * Unlike getPRComments (which returns one entry per thread using thread.id as the ID),
+   * this method returns every comment in the thread with the real per-comment ID — so
+   * callers can correctly filter to those posted before ctx.commentId.
+   *
+   * If threadId is not provided, falls back to getPRComments (one entry per thread).
+   */
+  async getThreadComments(prId: string | number, threadId?: number): Promise<PRComment[]> {
+    if (!threadId) return this.getPRComments(prId);
+
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads?api-version=7.0`
+    );
+    const res = await fetch(url, { headers: this.getAuthHeaders() });
+    if (!res.ok) return [];
+
+    const data = await res.json() as {
+      value: Array<{
+        id: number;
+        comments: Array<{
+          id: number;
+          content: string;
+          author: { displayName: string; uniqueName: string };
+          publishedDate: string;
+          lastUpdatedDate: string;
+        }>;
+      }>;
+    };
+
+    const thread = (data.value ?? []).find(t => t.id === threadId);
+    if (!thread) return [];
+
+    return thread.comments.map(c => ({
+      id: c.id,
+      body: c.content ?? '',
+      user: { login: c.author?.displayName ?? c.author?.uniqueName ?? 'unknown', type: 'User' },
+      createdAt: c.publishedDate,
+      updatedAt: c.lastUpdatedDate,
+    }));
+  }
+
+  /**
    * Update a review comment.
    *
    * commentId is the thread id (as returned by getReviewComments). AgnusAI always writes
@@ -1370,6 +1414,130 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     // Azure DevOps doesn't have a public rate limit API
     // Return null to indicate not applicable
     return null;
+  }
+
+  // ============================================
+  // Agentic Write Operations
+  // ============================================
+
+  /**
+   * Create a new branch from an existing branch.
+   * Uses the Azure DevOps Git Refs API.
+   */
+  async createBranch(branchName: string, fromBranch: string): Promise<void> {
+    // 1. Get the current SHA of fromBranch
+    const refsUrl = this.getGitApiUrl(
+      `/repositories/${this.repository}/refs?filter=heads/${encodeURIComponent(fromBranch)}&api-version=7.0`
+    );
+    const refsResponse = await fetch(refsUrl, { headers: this.getAuthHeaders() });
+    if (!refsResponse.ok) {
+      throw new Error(`Failed to get ref for branch '${fromBranch}': ${refsResponse.statusText}`);
+    }
+    const refsData = await refsResponse.json() as { value: Array<{ objectId: string }> };
+    const sha = refsData.value[0]?.objectId;
+    if (!sha) {
+      throw new Error(`Branch '${fromBranch}' not found`);
+    }
+
+    // 2. Create the new branch ref
+    const createUrl = this.getGitApiUrl(
+      `/repositories/${this.repository}/refs?api-version=7.0`
+    );
+    const createResponse = await fetch(createUrl, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify([{
+        name: `refs/heads/${branchName}`,
+        newObjectId: sha,
+        oldObjectId: '0000000000000000000000000000000000000000',
+      }]),
+    });
+    if (!createResponse.ok) {
+      throw new Error(`Failed to create branch '${branchName}': ${createResponse.statusText}`);
+    }
+    // Azure DevOps refs API returns HTTP 200 even for individual failures (e.g., branch already exists).
+    // Check the updateStatus of each ref in the response body.
+    const createData = await createResponse.json() as { value: Array<{ updateStatus: string; success: boolean }> };
+    const refResult = createData.value?.[0];
+    if (refResult && !refResult.success && refResult.updateStatus !== 'succeeded') {
+      throw new Error(`Failed to create branch '${branchName}': ${refResult.updateStatus}`);
+    }
+  }
+
+  /**
+   * Commit one or more files to a branch via a single push.
+   * Returns the new commit SHA.
+   */
+  async commitFiles(branch: string, files: Array<{ path: string; content: string }>, message: string): Promise<string> {
+    // Get the current HEAD SHA of the branch to use as the old commit
+    const refsUrl = this.getGitApiUrl(
+      `/repositories/${this.repository}/refs?filter=heads/${encodeURIComponent(branch)}&api-version=7.0`
+    );
+    const refsResponse = await fetch(refsUrl, { headers: this.getAuthHeaders() });
+    if (!refsResponse.ok) {
+      throw new Error(`Failed to get ref for branch '${branch}': ${refsResponse.statusText}`);
+    }
+    const refsData = await refsResponse.json() as { value: Array<{ objectId: string }> };
+    const oldObjectId = refsData.value[0]?.objectId;
+    if (!oldObjectId) {
+      throw new Error(`Branch '${branch}' not found`);
+    }
+
+    const pushUrl = this.getGitApiUrl(
+      `/repositories/${this.repository}/pushes?api-version=7.0`
+    );
+    const pushPayload = {
+      refUpdates: [{ name: `refs/heads/${branch}`, oldObjectId }],
+      commits: [{
+        comment: message,
+        changes: files.map(file => ({
+          changeType: 'edit',
+          item: { path: `/${file.path.replace(/^\//, '')}` },
+          newContent: {
+            content: Buffer.from(file.content).toString('base64'),
+            contentType: 'base64encoded',
+          },
+        })),
+      }],
+    };
+
+    const pushResponse = await fetch(pushUrl, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify(pushPayload),
+    });
+    if (!pushResponse.ok) {
+      const errText = await pushResponse.text();
+      throw new Error(`Failed to push files to '${branch}': ${pushResponse.statusText} — ${errText}`);
+    }
+    const pushData = await pushResponse.json() as { commits: Array<{ commitId: string }> };
+    return pushData.commits[0]?.commitId ?? '';
+  }
+
+  /**
+   * Open a pull request. Returns the PR URL and number.
+   */
+  async openPR(opts: { title: string; body: string; head: string; base: string }): Promise<{ url: string; number: number }> {
+    const prUrl = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests?api-version=7.0`
+    );
+    const prResponse = await fetch(prUrl, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({
+        title: opts.title,
+        description: opts.body,
+        sourceRefName: `refs/heads/${opts.head}`,
+        targetRefName: `refs/heads/${opts.base}`,
+      }),
+    });
+    if (!prResponse.ok) {
+      const errText = await prResponse.text();
+      throw new Error(`Failed to create PR: ${prResponse.statusText} — ${errText}`);
+    }
+    const prData = await prResponse.json() as { pullRequestId: number; url: string };
+    const webUrl = `${this.baseUrl}/${this.organization}/${this.project}/_git/${this.repository}/pullrequest/${prData.pullRequestId}`;
+    return { url: webUrl, number: prData.pullRequestId };
   }
 }
 

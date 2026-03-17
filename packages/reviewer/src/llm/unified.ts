@@ -56,12 +56,20 @@ export class UnifiedLLMBackend extends BaseLLMBackend {
 
   async generate(prompt: string, _context: ReviewContext, temperature?: number): Promise<string> {
     const temp = temperature ?? this.defaultTemperature;
-    const { text } = await generateText({
-      model: this.languageModel,
-      prompt,
-      ...(temp !== undefined && { temperature: temp }),
-    });
-    return text;
+    try {
+      const { text } = await generateText({
+        model: this.languageModel,
+        prompt,
+        ...(temp !== undefined && { temperature: temp }),
+      });
+      return text;
+    } catch (err) {
+      if (isTemperatureUnsupportedError(err) && temp !== undefined) {
+        const { text } = await generateText({ model: this.languageModel, prompt });
+        return text;
+      }
+      throw err;
+    }
   }
 
   override async generateReview(context: ReviewContext, temperature?: number): Promise<ReviewResult> {
@@ -71,15 +79,35 @@ export class UnifiedLLMBackend extends BaseLLMBackend {
     }
     const prompt = buildReviewPrompt(context);
     const temp = temperature ?? this.defaultTemperature;
-    const { text, usage } = await generateText({
-      model: this.languageModel,
-      prompt,
-      ...(temp !== undefined && { temperature: temp }),
-    });
-    const result = parseReviewResponse(text);
-    const tokensUsed = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
-    return { ...result, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
+    try {
+      const { text, usage } = await generateText({
+        model: this.languageModel,
+        prompt,
+        ...(temp !== undefined && { temperature: temp }),
+      });
+      const result = parseReviewResponse(text);
+      const tokensUsed = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+      return { ...result, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
+    } catch (err) {
+      if (isTemperatureUnsupportedError(err) && temp !== undefined) {
+        const { text, usage } = await generateText({ model: this.languageModel, prompt });
+        const result = parseReviewResponse(text);
+        const tokensUsed = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+        return { ...result, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
+      }
+      throw err;
+    }
   }
+}
+
+/** Returns true when the API error is specifically about an unsupported temperature value. */
+function isTemperatureUnsupportedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.toLowerCase().includes('temperature') && (
+    msg.toLowerCase().includes('unsupported') ||
+    msg.toLowerCase().includes('not support') ||
+    msg.toLowerCase().includes('only the default')
+  )
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
