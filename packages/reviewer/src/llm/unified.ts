@@ -86,13 +86,17 @@ export class UnifiedLLMBackend extends BaseLLMBackend {
         ...(temp !== undefined && { temperature: temp }),
       });
       const result = parseReviewResponse(text);
-      const tokensUsed = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const u = usage as any;
+      const tokensUsed = (u?.promptTokens ?? u?.inputTokens ?? 0) + (u?.completionTokens ?? u?.outputTokens ?? 0);
       return { ...result, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
     } catch (err) {
       if (isTemperatureUnsupportedError(err) && temp !== undefined) {
         const { text, usage } = await generateText({ model: this.languageModel, prompt });
         const result = parseReviewResponse(text);
-        const tokensUsed = (usage?.inputTokens ?? 0) + (usage?.outputTokens ?? 0);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const u = usage as any;
+        const tokensUsed = (u?.promptTokens ?? u?.inputTokens ?? 0) + (u?.completionTokens ?? u?.outputTokens ?? 0);
         return { ...result, tokensUsed: tokensUsed > 0 ? tokensUsed : undefined };
       }
       throw err;

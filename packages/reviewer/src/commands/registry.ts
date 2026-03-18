@@ -4,9 +4,12 @@ import { handleReview } from './handlers/review';
 import { handleHelp } from './handlers/help';
 import { handleFix } from './handlers/fix';
 import { handleTest } from './handlers/test';
+import { handlePRMeta } from './handlers/pr_meta';
 
 const comingSoonHandler = (name: string) =>
-  async () => ({ reply: `**@ryv** The \`${name}\` command is coming soon. Stay tuned!` });
+  async (ctx: import('./types').CommandContext) => ({
+    reply: `**${ctx.botMention ?? '@ryv'}** The \`${name}\` command is coming soon. Stay tuned!`,
+  });
 
 export const COMMAND_REGISTRY: CommandDescriptor[] = [
   {
@@ -67,6 +70,23 @@ export const COMMAND_REGISTRY: CommandDescriptor[] = [
     examples: ['find similar code', 'are there similar implementations'],
     handler: comingSoonHandler('similar'),
     comingSoon: true,
+  },
+  {
+    name: 'pr_meta',
+    description: 'Write or update the PR title, description, and/or labels. Use "add" to append, "rephrase" to overwrite.',
+    examples: [
+      'write PR description',
+      'add description',
+      'rephrase description',
+      'add title',
+      'rephrase title',
+      'add labels',
+      'write PR description and title',
+      'rephrase the PR description and title',
+      'update the PR description',
+      'set labels',
+    ],
+    handler: handlePRMeta,
   },
   {
     name: 'help',

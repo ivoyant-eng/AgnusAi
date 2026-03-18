@@ -14,6 +14,7 @@ import {
 } from '@agnus-ai/reviewer';
 import type { CommandContext } from '@agnus-ai/reviewer';
 import { getRepo } from './graph-cache';
+import { getAzureOAuthToken } from './azure-oauth';
 
 // Support comma-separated names: RYV_BOT_NAME=ryv,AI Agents,agnus
 const RYV_BOT_NAMES: string[] = (process.env.RYV_BOT_NAME ?? 'ryv')
@@ -49,6 +50,9 @@ export interface RunCommandOptions {
   commentId: number;
   threadId?: number;
   token?: string;
+  vcsInstallationId?: string;
+  /** Pre-resolved @mention alias to show in replies (e.g. "@AI Agents"). Overrides auto-extraction. */
+  botMention?: string;
   baseBranch: string;
   rawBody: string;
   pool: Pool;
@@ -61,8 +65,10 @@ export interface RunCommandOptions {
 export async function runCommand(opts: RunCommandOptions): Promise<void> {
   const {
     platform, repoId, repoUrl, prNumber, commentId, threadId,
-    token, baseBranch, rawBody, pool, forceCommand, triggerReview,
+    token, vcsInstallationId, baseBranch, rawBody, pool, forceCommand, triggerReview,
   } = opts;
+  // Use pre-resolved mention alias if passed from the webhook layer (avoids falling back to 'ryv')
+  const resolvedBotMention = opts.botMention;
 
   const rateKey = `${repoId}:${prNumber}`;
   if (isRateLimited(rateKey)) {
@@ -70,33 +76,50 @@ export async function runCommand(opts: RunCommandOptions): Promise<void> {
     return;
   }
 
-  // Extract query: strip the @<botname> prefix (any configured name, case-insensitive).
+  // Extract query: strip the @<GUID> or @<botname> prefix
   let userQuery = rawBody;
-  const matchedName = RYV_BOT_NAMES.find(n =>
-    rawBody.toLowerCase().includes(`@${n.toLowerCase()}`)
-  );
-  if (matchedName) {
-    const idx = rawBody.toLowerCase().indexOf(`@${matchedName.toLowerCase()}`);
-    userQuery = rawBody.slice(idx + matchedName.length + 1).trim();
+  let botMention: string = resolvedBotMention ?? `@${RYV_BOT_NAMES[0] ?? 'ryv'}`;
+  // Azure @<GUID> mention — strip GUID, use pre-resolved display name
+  const guidMatch = /@<[0-9a-f-]{36}>/i.exec(rawBody);
+  if (guidMatch) {
+    userQuery = rawBody.slice(guidMatch.index + guidMatch[0].length).trim();
+  } else {
+    // GitHub / plain @name mention
+    const matchedName = RYV_BOT_NAMES.find(n =>
+      rawBody.toLowerCase().includes(`@${n.toLowerCase()}`)
+    );
+    if (matchedName) {
+      if (!resolvedBotMention) botMention = `@${matchedName}`;
+      const idx = rawBody.toLowerCase().indexOf(`@${matchedName.toLowerCase()}`);
+      userQuery = rawBody.slice(idx + matchedName.length + 1).trim();
+    }
+  }
+
+  // Build VCS adapter — prefer PAT, fall back to OAuth installation token
+  let vcs: GitHubAdapter | AzureDevOpsAdapter;
+  let effectiveToken = token;
+  if (platform === 'github') {
+    if (!effectiveToken) { console.warn('[command-runner] No GitHub token'); return; }
+    const parts = repoUrl.replace(/\/$/, '').split('/');
+    vcs = new GitHubAdapter({ token: effectiveToken, owner: parts[parts.length - 2] ?? '', repo: parts[parts.length - 1] ?? '' });
+  } else {
+    if (!effectiveToken && vcsInstallationId) {
+      try {
+        effectiveToken = await getAzureOAuthToken(pool, vcsInstallationId)
+      } catch (err) {
+        console.warn('[command-runner] OAuth token fetch failed:', (err as Error).message)
+      }
+    }
+    if (!effectiveToken) { console.warn('[command-runner] No Azure token'); return; }
+    const url = new URL(repoUrl);
+    const p = url.pathname.split('/').filter(Boolean);
+    vcs = new AzureDevOpsAdapter({ organization: p[0] ?? '', project: p[1] ?? '', repository: p[p.length - 1] ?? '', token: effectiveToken, authType: token ? 'pat' : 'bearer' });
   }
 
   const ctx: CommandContext = {
     platform, repoId, repoUrl, prNumber, commentId, threadId,
-    token, baseBranch, userQuery, rawMention: rawBody, pool,
+    token: effectiveToken, baseBranch, userQuery, rawMention: rawBody, botMention, pool,
   };
-
-  // Build VCS adapter
-  let vcs: GitHubAdapter | AzureDevOpsAdapter;
-  if (platform === 'github') {
-    if (!token) { console.warn('[command-runner] No GitHub token'); return; }
-    const parts = repoUrl.replace(/\/$/, '').split('/');
-    vcs = new GitHubAdapter({ token, owner: parts[parts.length - 2] ?? '', repo: parts[parts.length - 1] ?? '' });
-  } else {
-    if (!token) { console.warn('[command-runner] No Azure token'); return; }
-    const url = new URL(repoUrl);
-    const p = url.pathname.split('/').filter(Boolean);
-    vcs = new AzureDevOpsAdapter({ organization: p[0] ?? '', project: p[1] ?? '', repository: p[p.length - 1] ?? '', token });
-  }
 
   const llm = createBackendFromEnv(process.env);
 

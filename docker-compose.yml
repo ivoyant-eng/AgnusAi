@@ -99,7 +99,9 @@ services:
       - agnus-network
 
   opencode:
-    image: ryv-opencode:local
+    build:
+      context: .
+      dockerfile: opencode.Dockerfile
     volumes:
       - repos-data:/repos
     ports:
