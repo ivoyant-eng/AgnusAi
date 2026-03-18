@@ -161,7 +161,7 @@ async function resolveApplicableRules(
   return candidates.filter(rule => isRuleApplicable(rule, repoId, changedPaths))
 }
 
-export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; comments?: any[] }> {
+export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; tokensUsed?: number; comments?: any[] }> {
   const { platform, repoId, repoUrl, prNumber, token, pool } = opts
 
   // 1. Build VCS adapter
@@ -280,7 +280,7 @@ async function prefetchTopLibraryDocs(
   return docs
 }
 
-async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; comments?: any[] }> {
+async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; tokensUsed?: number; comments?: any[] }> {
   const { platform, repoId, prNumber, baseBranch } = opts
 
   const config: Config = {
@@ -506,6 +506,7 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
           durationMs: t.durationMs,
           commentCount: t.commentCount,
           verdict: t.verdict,
+          tokensUsed: t.tokensUsed ?? null,
           error: t.error ?? null,
         })),
       )}`,
@@ -588,11 +589,13 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
     const dryToolAgents = agentTelemetry.filter((t: any) => (t.toolCalls ?? 0) > 0)
     const totalToolCalls = dryToolAgents.reduce((s: number, t: any) => s + (t.toolCalls ?? 0), 0)
     const totalCacheHits = dryToolAgents.reduce((s: number, t: any) => s + (t.toolCacheHits ?? 0), 0)
+    const totalTokensUsed = agentTelemetry.reduce((s: number, t: any) => s + (t.tokensUsed ?? 0), 0)
     return {
       verdict: (result as any).verdict ?? 'unknown',
       commentCount: comments.length,
       prScore: (result as any).prScore ?? null,
       reviewId,
+      tokensUsed: totalTokensUsed > 0 ? totalTokensUsed : undefined,
       comments: comments.map((c: any) => ({
         path: c.path,
         line: c.line,
