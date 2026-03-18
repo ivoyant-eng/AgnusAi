@@ -92,6 +92,8 @@ export default defineConfig({
           { text: 'Precision Filter', link: '/guide/review-modes#precision-filter' },
           { text: 'Smart Deduplication', link: '/reference/deduplication' },
           { text: 'Comment Threads', link: '/reference/comment-threads' },
+          { text: 'Tool-Augmented Review', link: '/reference/tool-augmented' },
+          { text: 'Self-Reflection Quality Gate', link: '/reference/self-reflection' },
           { text: 'Feedback & Learning Loop', link: '/guide/hosted-setup#feedback-learning-loop' },
           { text: 'Known Issues & Blindspots', link: '/reference/known-issues' },
         ],
@@ -109,6 +111,7 @@ export default defineConfig({
         items: [
           { text: 'Dev Setup', link: '/development/setup' },
           { text: 'Testing Guide', link: '/development/testing' },
+          { text: 'Contributing', link: '/development/contributing' },
           { text: 'ADR-001: Architecture', link: '/architecture/adr' },
         ],
       },
