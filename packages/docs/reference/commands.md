@@ -29,6 +29,7 @@ Legacy `/ask <question>` continues to work as a backward-compatible alias.
 | `review` | Trigger a fresh full review of the PR |
 | `fix` | Autonomously fix a specific issue — opens a companion PR |
 | `test` | Generate unit tests for the changed code |
+| `pr_meta` | Write or update the PR title, description, and/or labels |
 | `help` | List all available commands with examples |
 
 **Coming soon:** `implement`, `docs`, `changelog`, `ticket_create`, `similar`
@@ -103,6 +104,25 @@ OpenCode has up to **10 minutes** to complete the fix (5-minute POST timeout + g
 ## The `test` Command
 
 `@ryv generate tests` builds a prompt from the PR diff, sends it to OpenCode, and opens a `ryv/test/{prNumber}-…` branch with the generated tests. Same async flow as `fix`.
+
+---
+
+## The `pr_meta` Command
+
+`@ryv update the PR description` rewrites or updates your PR title, description, and/or labels based on the actual diff.
+
+```
+@ryv write a PR description
+@ryv rephrase the title and add labels
+@ryv add a summary to the description
+```
+
+**Modes:**
+- **rephrase** — replaces the existing content entirely (triggered by "rewrite", "rephrase", "update the title", etc.)
+- **add** — appends to the existing content (triggered by "add", "append", "include", etc.)
+- Defaults to description-only if nothing specific is mentioned
+
+Ryv reads the diff and graph context to generate a structured PR description covering what changed, why, and the blast radius of the change.
 
 ---
 

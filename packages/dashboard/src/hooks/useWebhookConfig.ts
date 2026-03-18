@@ -11,9 +11,10 @@ const fetcher = (url: string) => fetch(url, { credentials: 'include' }).then(r =
 export function useWebhookConfig(platform: 'github' | 'azure') {
   const { user } = useAuth()
 
-  const activeOrgSlug = user?.orgs?.find(
-    (o: { orgId: string; slug: string }) => o.orgId === user.activeOrgId,
-  )?.slug
+  const activeOrgSlug =
+    (user?.orgs?.find(
+      (o: { orgId: string; slug: string }) => o.orgId === user.activeOrgId,
+    ) ?? user?.orgs?.[0])?.slug
 
   const webhookPath =
     platform === 'azure'

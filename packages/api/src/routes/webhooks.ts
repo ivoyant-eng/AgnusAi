@@ -14,6 +14,7 @@ import {
 } from '../pr-event'
 import { runAsk } from '../ask-runner'
 import { runCommand } from '../command-runner'
+import { getAzureOAuthToken } from '../azure-oauth'
 
 const execAsync = promisify(exec)
 
@@ -205,30 +206,39 @@ const RYV_BOT_NAMES: string[] = (process.env.RYV_BOT_NAME ?? 'ryv')
   .map(n => n.trim())
   .filter(Boolean)
 
-// Cache of token → resolved display name (to avoid repeated API calls)
-const resolvedBotNames = new Map<string, string>()
+interface BotIdentity {
+  displayName: string
+  /** Azure identity GUID — ADO encodes mentions as @<GUID> in comment content */
+  id?: string
+}
+
+// Cache of token → resolved bot identity (to avoid repeated API calls)
+const resolvedBotIdentities = new Map<string, BotIdentity>()
 
 /**
- * Resolve the display name of the account that owns `token` via the VCS platform API.
+ * Resolve the identity of the account that owns `token` via the VCS platform API.
+ * For Azure, returns both the display name and the identity GUID used in @<GUID> mentions.
  * Result is cached per token. Errors are silently swallowed — fallback to configured names.
- *
- * For Azure DevOps: GET https://app.vssps.visualstudio.com/_apis/profile/me
- * For GitHub: GET https://api.github.com/user
  */
-async function resolveBotDisplayName(token: string, platform: 'azure' | 'github', orgUrl?: string): Promise<string | null> {
-  if (resolvedBotNames.has(token)) return resolvedBotNames.get(token)!
+async function resolveBotIdentity(token: string, platform: 'azure' | 'github', orgUrl?: string, bearerAuth?: boolean): Promise<BotIdentity | null> {
+  if (resolvedBotIdentities.has(token)) return resolvedBotIdentities.get(token)!
   try {
-    let displayName: string | null = null
+    let identity: BotIdentity | null = null
     if (platform === 'azure') {
       // connectionData returns the authenticated user without requiring a specific api-version.
-      // Works with both PATs and OAuth tokens. orgUrl extracted from the repo URL.
+      // PATs use Basic auth (`:pat` base64); OAuth tokens use Bearer auth.
       const base = orgUrl ?? 'https://dev.azure.com'
+      const authHeader = bearerAuth
+        ? `Bearer ${token}`
+        : `Basic ${Buffer.from(`:${token}`).toString('base64')}`
       const res = await fetch(`${base}/_apis/connectionData`, {
-        headers: { Authorization: `Basic ${Buffer.from(`:${token}`).toString('base64')}` },
+        headers: { Authorization: authHeader },
       })
       if (res.ok) {
-        const data = await res.json() as { authenticatedUser?: { providerDisplayName?: string } }
-        displayName = data.authenticatedUser?.providerDisplayName ?? null
+        const data = await res.json() as { authenticatedUser?: { providerDisplayName?: string; id?: string } }
+        const displayName = data.authenticatedUser?.providerDisplayName
+        const id = data.authenticatedUser?.id
+        if (displayName || id) identity = { displayName: displayName ?? '', id }
       }
     } else {
       const res = await fetch('https://api.github.com/user', {
@@ -236,24 +246,27 @@ async function resolveBotDisplayName(token: string, platform: 'azure' | 'github'
       })
       if (res.ok) {
         const data = await res.json() as { login?: string; name?: string }
-        displayName = data.name ?? data.login ?? null
+        const displayName = data.name ?? data.login
+        if (displayName) identity = { displayName }
       }
     }
-    if (displayName) resolvedBotNames.set(token, displayName)
-    return displayName
+    if (identity) resolvedBotIdentities.set(token, identity)
+    return identity
   } catch {
     return null
   }
 }
 
-async function isBotMentioned(text: string, token?: string, platform?: 'azure' | 'github', orgUrl?: string): Promise<boolean> {
+async function isBotMentioned(text: string, token?: string, platform?: 'azure' | 'github', orgUrl?: string, bearerAuth?: boolean): Promise<boolean> {
   const lower = text.toLowerCase()
   // Check statically configured names first (fast path, no network call)
   if (RYV_BOT_NAMES.some(name => lower.includes(`@${name.toLowerCase()}`))) return true
-  // Auto-resolve: check if the token owner's display name is mentioned
+  // Auto-resolve: check display name and Azure @<GUID> mention format
   if (token && platform) {
-    const resolved = await resolveBotDisplayName(token, platform, orgUrl)
-    if (resolved && lower.includes(`@${resolved.toLowerCase()}`)) return true
+    const identity = await resolveBotIdentity(token, platform, orgUrl, bearerAuth)
+    if (identity?.displayName && lower.includes(`@${identity.displayName.toLowerCase()}`)) return true
+    // Azure DevOps encodes mentions as @<GUID> in comment.content — match by identity ID
+    if (identity?.id && lower.includes(`@<${identity.id.toLowerCase()}>`)) return true
   }
   return false
 }
@@ -336,12 +349,23 @@ async function handleRyvCommandAzure(
   if (!prNumber) return false
 
   const commentId = comment?.id as number
-  const threadId = (resource?.threadId ?? resource?.pullRequestThreadContext?.trackingCriteria?.firstComparingIteration) as number | undefined
+  // Extract thread ID — ADO puts it in the comment's _links.threads.href, e.g. .../threads/80256
+  const threadHref: string = comment?._links?.threads?.href ?? comment?._links?.self?.href ?? ''
+  const threadIdFromHref = /\/threads\/(\d+)/.exec(threadHref)?.[1]
+  const threadId: number | undefined = resource?.threadId ?? (threadIdFromHref ? parseInt(threadIdFromHref, 10) : undefined)
   const baseBranch = (pr?.targetRefName ?? '').replace('refs/heads/', '') || 'main'
 
-  // Fetch token first so we can auto-resolve the bot's display name for mention detection
+  // Fetch token first so we can auto-resolve the bot's identity GUID for @<GUID> mention detection.
+  // Prefer PAT; fall back to OAuth installation token for repos that don't store a PAT.
   const repoCreds = await getRepoCreds(pool, repoId)
-  const token = repoCreds.token
+  let effectiveToken = repoCreds.token
+  let bearerAuth = false
+  if (!effectiveToken && repoCreds.vcsInstallationId) {
+    try {
+      effectiveToken = await getAzureOAuthToken(pool, repoCreds.vcsInstallationId)
+      bearerAuth = true
+    } catch { /* fallback — mention detection will skip identity resolution */ }
+  }
 
   // Extract org URL (https://dev.azure.com/org) from the repo URL for connectionData lookup
   let orgUrl: string | undefined
@@ -351,16 +375,20 @@ async function handleRyvCommandAzure(
     orgUrl = `${u.origin}/${orgPart}`
   } catch { /* fallback to default */ }
 
-  if (!await isBotMentioned(body, token ?? undefined, 'azure', orgUrl)) return false
+  if (!await isBotMentioned(body, effectiveToken ?? undefined, 'azure', orgUrl, bearerAuth)) return false
+
+  // After isBotMentioned the identity is cached — use its display name so replies show "@AI Agents"
+  const resolvedIdentity = effectiveToken ? resolvedBotIdentities.get(effectiveToken) : undefined
+  const botMention = resolvedIdentity?.displayName ? `@${resolvedIdentity.displayName}` : undefined
 
   const triggerReview = async (): Promise<void> => { await runReview({
     platform: 'azure', repoId, repoUrl, prNumber, baseBranch,
-    token, pool,
+    token: repoCreds.token, pool,
     vcsInstallationId: repoCreds.vcsInstallationId,
   }) }
 
   setImmediate(() =>
-    runCommand({ platform: 'azure', repoId, repoUrl, prNumber, commentId, threadId, token, baseBranch, rawBody: body, pool, triggerReview })
+    runCommand({ platform: 'azure', repoId, repoUrl, prNumber, commentId, threadId, token: repoCreds.token, vcsInstallationId: repoCreds.vcsInstallationId, botMention, baseBranch, rawBody: body, pool, triggerReview })
       .catch(err => console.error('[command-runner] Error:', (err as Error).message))
   )
   return true

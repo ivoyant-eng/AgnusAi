@@ -161,7 +161,7 @@ async function resolveApplicableRules(
   return candidates.filter(rule => isRuleApplicable(rule, repoId, changedPaths))
 }
 
-export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; comments?: any[] }> {
+export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; tokensUsed?: number; comments?: any[] }> {
   const { platform, repoId, repoUrl, prNumber, token, pool } = opts
 
   // 1. Build VCS adapter
@@ -225,21 +225,34 @@ export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: stri
     })
   }
 
-  // 3. GitHub + non-incremental Azure (created events)
-  const result = await executeReview(opts, vcs, pool)
-
-  // 4. Save iteration for Azure created event so the first updated event is correctly gated
-  if (platform === 'azure' && azureAdapter && !opts.dryRun) {
-    try {
-      const latestIteration = await azureAdapter.getLatestIterationId(prNumber)
-      await saveLastReviewedIteration(pool, repoId, prNumber, latestIteration)
-      console.log(`[review-runner] Azure PR ${prNumber} (created): saved last_reviewed_iteration=${latestIteration}`)
-    } catch (err) {
-      console.error(`[review-runner] Azure PR ${prNumber} (created): FAILED to save iteration state:`, (err as Error).message)
-    }
+  // 3. Azure created events — use the same per-PR lock as the updated path.
+  // ADO fires both git.pullrequest.created AND git.pullrequest.updated within milliseconds
+  // when reviewers are added at PR open time. Without this lock both paths ran independently
+  // and posted duplicate comment sets. Whichever event wins the lock reviews first; the
+  // second finds last_reviewed_iteration > 0 and exits as a no-op.
+  if (platform === 'azure' && azureAdapter) {
+    return withPRLock(`${repoId}:${prNumber}`, async () => {
+      const lastReviewed = await getLastReviewedIteration(pool, repoId, prNumber)
+      if (lastReviewed > 0) {
+        console.log(`[review-runner] Azure PR ${prNumber} (created): already reviewed (iteration=${lastReviewed}) — skipping duplicate`)
+        return { verdict: 'comment', commentCount: 0, reviewId: '' }
+      }
+      const result = await executeReview(opts, vcs, pool)
+      if (!opts.dryRun) {
+        try {
+          const latestIteration = await azureAdapter!.getLatestIterationId(prNumber)
+          await saveLastReviewedIteration(pool, repoId, prNumber, latestIteration)
+          console.log(`[review-runner] Azure PR ${prNumber} (created): saved last_reviewed_iteration=${latestIteration}`)
+        } catch (err) {
+          console.error(`[review-runner] Azure PR ${prNumber} (created): FAILED to save iteration state:`, (err as Error).message)
+        }
+      }
+      return result
+    })
   }
 
-  return result
+  // 4. GitHub (no lock needed — GitHub sends exactly one event per PR action)
+  return await executeReview(opts, vcs, pool)
 }
 
 /**
@@ -267,7 +280,7 @@ async function prefetchTopLibraryDocs(
   return docs
 }
 
-async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; comments?: any[] }> {
+async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Promise<{ verdict: string; commentCount: number; reviewId: string; prScore?: number | null; tokensUsed?: number; comments?: any[] }> {
   const { platform, repoId, prNumber, baseBranch } = opts
 
   const config: Config = {
@@ -493,6 +506,7 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
           durationMs: t.durationMs,
           commentCount: t.commentCount,
           verdict: t.verdict,
+          tokensUsed: t.tokensUsed ?? null,
           error: t.error ?? null,
         })),
       )}`,
@@ -575,11 +589,13 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
     const dryToolAgents = agentTelemetry.filter((t: any) => (t.toolCalls ?? 0) > 0)
     const totalToolCalls = dryToolAgents.reduce((s: number, t: any) => s + (t.toolCalls ?? 0), 0)
     const totalCacheHits = dryToolAgents.reduce((s: number, t: any) => s + (t.toolCacheHits ?? 0), 0)
+    const totalTokensUsed = agentTelemetry.reduce((s: number, t: any) => s + (t.tokensUsed ?? 0), 0)
     return {
       verdict: (result as any).verdict ?? 'unknown',
       commentCount: comments.length,
       prScore: (result as any).prScore ?? null,
       reviewId,
+      tokensUsed: totalTokensUsed > 0 ? totalTokensUsed : undefined,
       comments: comments.map((c: any) => ({
         path: c.path,
         line: c.line,
@@ -744,8 +760,10 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
   const shouldRunForAction = prSettings.updateMode === 'created_and_updated'
     ? (action === 'created' || action === 'updated' || action === 'opened' || action === 'synchronize' || action === 'manual')
     : (action === 'created' || action === 'opened' || action === 'manual')
+  // PR description/title/labels are now command-driven (@AI Agents write PR description).
+  // Auto-update only runs when explicitly requested (updatePRDescription: true via manual API call).
   const shouldUpdatePRDescription =
-    (opts.updatePRDescription ?? true) &&
+    (opts.updatePRDescription === true) &&
     prSettings.enabled &&
     shouldRunForAction
 
