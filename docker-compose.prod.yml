@@ -21,8 +21,6 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./traefik/dynamic.yml:/traefik/dynamic.yml:ro
       - /etc/nginx/ssl:/etc/nginx/ssl:ro
-    labels:
-      - "traefik.enable=false"
     restart: unless-stopped
     networks:
       - agnus-network
@@ -30,15 +28,13 @@ services:
   agnus:
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.agnus-api.rule=PathPrefix(`/`)"
-      - "traefik.http.routers.agnus-api.entrypoints=websecure"
-      - "traefik.http.routers.agnus-api.tls=true"
-      - "traefik.http.routers.agnus-api.service=agnus-api"
-      - "traefik.http.services.agnus-api.loadbalancer.server.port=3000"
-      - "traefik.http.routers.agnus-health.rule=Path(`/health`)"
-      - "traefik.http.routers.agnus-health.entrypoints=websecure"
-      - "traefik.http.routers.agnus-health.tls=true"
-      - "traefik.http.routers.agnus-health.service=agnus-health"
-      - "traefik.http.services.agnus-health.loadbalancer.server.port=3000"
+      - "traefik.http.routers.agnus.rule=Host(`${DOMAIN:-ryv.app}`)"
+      - "traefik.http.routers.agnus.entrypoints=web,websecure"
+      - "traefik.http.routers.agnus.tls=true"
+      - "traefik.http.services.agnus.loadbalancer.server.port=3000"
     depends_on:
       - traefik
+
+networks:
+  agnus-network:
+    driver: bridge

@@ -2,7 +2,7 @@ services:
   agnus:
     build: .
     environment:
-      - DATABASE_URL=postgres://${POSTGRES_USER:-agnus}:${POSTGRES_PASSWORD:-agnus}@postgres:5432/${POSTGRES_DB:-agnus}
+      - DATABASE_URL=${DATABASE_URL:-postgres://${POSTGRES_USER:-agnus}:${POSTGRES_PASSWORD:-agnus}@postgres:5432/${POSTGRES_DB:-agnus}}
       - ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-changeme}
       - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
@@ -50,8 +50,8 @@ services:
       - COMMAND_MAX_PER_HOUR=${COMMAND_MAX_PER_HOUR:-10}
       # Rules system
       - RULES_SYSTEM_ENABLED=${RULES_SYSTEM_ENABLED:-true}
-      - PUBLIC_URL=${PUBLIC_URL:-https://agnusai.platformnx.com}
-      - BASE_URL=${BASE_URL:-https://agnusai.platformnx.com}
+      - PUBLIC_URL=${PUBLIC_URL:-https://ryv.app}
+      - BASE_URL=${BASE_URL:-https://ryv.app}
       - FEEDBACK_SECRET=${FEEDBACK_SECRET:-}
       # Rate limiting / abuse protection
       - TRUST_PROXY=${TRUST_PROXY:-true}
@@ -74,29 +74,26 @@ services:
     volumes:
       - /tmp:/tmp:ro
       - repos-data:/repos
-    depends_on:
-      postgres:
-        condition: service_healthy
     restart: unless-stopped
     networks:
       - agnus-network
 
-  postgres:
-    image: pgvector/pgvector:pg16
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-agnus}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-agnus}
-      - POSTGRES_DB=${POSTGRES_DB:-agnus}
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agnus}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-    networks:
-      - agnus-network
+  # postgres:  # Disabled — using remote Azure PostgreSQL
+  #   image: pgvector/pgvector:pg16
+  #   environment:
+  #     - POSTGRES_USER=${POSTGRES_USER:-agnus}
+  #     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-agnus}
+  #     - POSTGRES_DB=${POSTGRES_DB:-agnus}
+  #   volumes:
+  #     - postgres-data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agnus}"]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 10
+  #   restart: unless-stopped
+  #   networks:
+  #     - agnus-network
 
   opencode:
     build:
@@ -122,6 +119,6 @@ networks:
     driver: bridge
 
 volumes:
-  postgres-data:
+  # postgres-data:  # Disabled — using remote Azure PostgreSQL
   repos-data:
   # ollama-data:  # Uncomment if using Ollama
